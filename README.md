@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="https://unpkg.com/opencode-session-media/screenshot.jpg" alt="The Media panel beside a session, showing screenshots in justified rows" width="900" />
+  <img src="./screenshot.jpg" alt="The Media panel beside a session, showing screenshots in justified rows" width="900" />
 </p>
 
 Adds a **Media** tab to a session's side panel. It gathers the images the agent
@@ -58,7 +58,7 @@ Then add the checkout's absolute path to `plugins`.
 ## Use
 
 <p align="center">
-  <img src="https://unpkg.com/opencode-session-media/screenshot-viewer.jpg" alt="The full-window viewer with a screenshot open, arrows and a 1 / 7 counter" width="900" />
+  <img src="./screenshot-viewer.jpg" alt="The full-window viewer with a screenshot open, arrows and a 1 / 7 counter" width="900" />
 </p>
 
 Open a session, then pick **Media** from the session panel menu, or run
