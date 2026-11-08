@@ -11,6 +11,10 @@
   <a href="https://www.npmjs.com/package/opencode-session-media"><img alt="npm version" src="https://img.shields.io/npm/v/opencode-session-media.svg" /></a>
 </p>
 
+<p align="center">
+  <img src="https://unpkg.com/opencode-session-media/screenshot.jpg" alt="The Media panel beside a session, showing screenshots in justified rows" width="900" />
+</p>
+
 Adds a **Media** tab to a session's side panel. It gathers the images the agent
 read, the screenshots it took, and the files you attached, newest first, so you
 can find that one screenshot without scrolling the chat.
@@ -52,6 +56,10 @@ Then add the checkout's absolute path to `plugins`.
 </details>
 
 ## Use
+
+<p align="center">
+  <img src="https://unpkg.com/opencode-session-media/screenshot-viewer.jpg" alt="The full-window viewer with a screenshot open, arrows and a 1 / 7 counter" width="900" />
+</p>
 
 Open a session, then pick **Media** from the session panel menu, or run
 **Open session media** from the command palette.

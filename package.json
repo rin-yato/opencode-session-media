@@ -32,7 +32,9 @@
     "dist",
     "LICENSE",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "screenshot.jpg",
+    "screenshot-viewer.jpg"
   ],
   "scripts": {
     "build": "vite build",
