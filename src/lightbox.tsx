@@ -72,7 +72,15 @@ export function Lightbox(props: {
   const current = createMemo(() => props.items()[index()])
   const count = () => props.items().length
 
-  const [src] = createResource(current, (item) => sourceOf(item, props.read))
+  // A blob URL can be revoked before its `<img>` loads; one retry per image re-reads it.
+  const [retried, setRetried] = createSignal<string>()
+  const [src] = createResource(
+    () => {
+      const item = current()
+      return item ? ([item, retried() === item.id] as const) : undefined
+    },
+    ([item]) => sourceOf(item, props.read),
+  )
 
   // A new image reports its own size on load. Until then there is no box to size.
   createEffect(on(id, () => setNatural(undefined), { defer: true }))
@@ -156,6 +164,10 @@ export function Lightbox(props: {
               src={url()}
               alt=""
               draggable={false}
+              onError={() => {
+                const item = current()
+                if (item && natural() === undefined && retried() !== item.id) setRetried(item.id)
+              }}
               onLoad={(event) => {
                 const { naturalWidth: width, naturalHeight: height } = event.currentTarget
                 if (width > 0 && height > 0) setNatural({ width, height })

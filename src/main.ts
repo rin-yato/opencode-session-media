@@ -24,29 +24,36 @@ const EXTENSION: Record<string, string> = {
 /** A header fits in far less; this covers a JPEG with a large embedded thumbnail before its frame header. */
 const HEAD_BYTES = 1024 * 1024
 const MAX_MEASURE = 500
-const UNKNOWN = { width: 0, height: 0 }
+const MISSING = { width: 0, height: 0, exists: false }
+const UNSIZED = { width: 0, height: 0, exists: true }
 
-/** An image file's pixel size, read without loading the whole file. */
-async function measure(path: string): Promise<{ width: number; height: number }> {
+/** An image file's pixel size, read without loading the whole file; `exists` is false when there is no such file. */
+async function measure(path: string): Promise<{ width: number; height: number; exists: boolean }> {
   try {
-    if (!mimeForPath(path) || !isAbsolute(path)) return UNKNOWN
+    if (!mimeForPath(path) || !isAbsolute(path)) return MISSING
     const info = await stat(path)
-    if (!info.isFile()) return UNKNOWN
-    const handle = await open(path, "r")
+    if (!info.isFile()) return MISSING
     try {
-      const head = Buffer.alloc(Math.min(info.size, HEAD_BYTES))
-      await handle.read(head, 0, head.length, 0)
-      const found = imageSize(head)
-      if (found) return found
-    } finally {
-      await handle.close()
+      const handle = await open(path, "r")
+      try {
+        const head = Buffer.alloc(Math.min(info.size, HEAD_BYTES))
+        await handle.read(head, 0, head.length, 0)
+        const found = imageSize(head)
+        if (found) return { ...found, exists: true }
+      } finally {
+        await handle.close()
+      }
+      // The size sat past the first megabyte: read the file once more, within the usual cap.
+      if (info.size > HEAD_BYTES && info.size <= MAX_BYTES) {
+        const found = imageSize(await readFile(path))
+        if (found) return { ...found, exists: true }
+      }
+    } catch {
+      // Present but unreadable: the size is unknown.
     }
-    // The size sat past the first megabyte: read the file once more, within the usual cap.
-    if (info.size > HEAD_BYTES && info.size <= MAX_BYTES)
-      return imageSize(await readFile(path)) ?? UNKNOWN
-    return UNKNOWN
+    return UNSIZED
   } catch {
-    return UNKNOWN
+    return MISSING
   }
 }
 

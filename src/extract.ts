@@ -18,6 +18,11 @@ export interface MediaItem {
   readonly tool: string | undefined
   readonly messageID: string
   readonly time: number | undefined
+  /**
+   * Guessed from free text (an unquoted path with spaces) and possibly not a
+   * path at all: the panel shows it only once the file is known to exist.
+   */
+  readonly tentative?: boolean
 }
 
 type Json = Record<string, unknown>
@@ -54,21 +59,70 @@ export function mimeForPath(path: string): string | undefined {
 
 const isAbsolutePath = (value: string) => value.startsWith("/")
 
+const EXT = "\\.(?:png|jpe?g|gif|webp)"
+// One path character outside a quoted path: no whitespace, slash, quotes, or
+// brackets. A backslash only counts as part of an escaped space (`\ `).
+const PLAIN_NO_SLASH = "(?:\\\\\\x20|[^\\s\"'`<>()\\[\\]{}\\\\|/])"
+
+/**
+ * Alternatives are tried left to right at each position, so a quote or `file:`
+ * that opens before the path wins over the bare path inside it.
+ *  1. quoted: `"/a b/c d.png"`; spaces anywhere.
+ *  2. `file://` URL; percent-encoded, decoded afterwards.
+ *  3. bare path: starts at a boundary, directories hold no unescaped spaces, the
+ *     basename may hold plain spaces. Since a basename cannot contain `/`, a
+ *     match never spans ` /` and two paths on one line never merge.
+ */
+const PATH_PATTERN = new RegExp(
+  [
+    `(["'\`])(\\/[^"'\`\\n<>|]*?${EXT})\\1`,
+    `file:\\/\\/(\\/[^\\s"'\`<>()\\[\\]{}\\\\|]+?${EXT})(?!\\w)`,
+    `(?<![\\w./~:-])(\\/+(?:${PLAIN_NO_SLASH}+\\/+)*(?:${PLAIN_NO_SLASH}(?:\\x20|${PLAIN_NO_SLASH})*?)?${EXT})(?!\\w)`,
+  ].join("|"),
+  "gi",
+)
+
+const decode = (value: string) => {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
 /**
  * Absolute image paths a tool printed in its text output, such as
  * `Screenshot 800x1739: /var/.../shot.jpg`. A path must start at a boundary, so
  * the tail of a URL or a relative path is never mistaken for one.
+ *
+ * Known false positive: bare text before an image name can read as a basename
+ * with spaces, so `see /tmp/out then photo.png` yields `/tmp/out then photo.png`.
+ * Those matches are reported as `tentative` by `imageMentionsIn`; the panel
+ * shows them only if the file exists. Accepted to support default macOS
+ * screenshot names like `Screenshot 2026-11-11 at 10.00.00.png`.
  */
 export function imagePathsIn(text: string): string[] {
-  const found = new Set<string>()
-  const pattern = /(?<![\w./~:-])(\/[^\s"'`<>()[\]{}\\|]+?\.(?:png|jpe?g|gif|webp))(?![\w])/gi
-  for (const match of text.matchAll(pattern)) {
-    const raw = match[1]
-    if (!raw) continue
-    // `file:///x` leaves extra leading slashes behind.
-    found.add(raw.replace(/^\/{2,}/, "/"))
+  return imageMentionsIn(text).map((mention) => mention.path)
+}
+
+/** Like `imagePathsIn`, flagging paths that were guessed from unquoted text with spaces. */
+export function imageMentionsIn(text: string): { path: string; tentative: boolean }[] {
+  const found = new Map<string, boolean>()
+  for (const match of text.matchAll(PATH_PATTERN)) {
+    let path: string
+    let tentative = false
+    if (match[2]) path = match[2]
+    else if (match[3]) path = decode(match[3])
+    else if (match[4]) {
+      tentative = /(?<!\\) /.test(match[4])
+      path = match[4].replace(/\\ /g, " ")
+    } else continue
+    // `file:///x` can leave extra leading slashes behind.
+    path = path.replace(/^\/{2,}/, "/")
+    // Any firm mention of a path outweighs a guessed one.
+    found.set(path, (found.get(path) ?? true) && tentative)
   }
-  return [...found]
+  return [...found].map(([path, tentative]) => ({ path, tentative }))
 }
 
 /** Media a tool result carried or named, in order. */
@@ -107,10 +161,11 @@ export function fromToolContent(input: {
     if (part.type === "text") {
       const text = str(part.text)
       if (!text) return
-      for (const path of imagePathsIn(text)) {
+      for (const { path, tentative } of imageMentionsIn(text)) {
         const mime = mimeForPath(path)
         if (!mime) continue
         items.push({
+          tentative,
           id: `${input.messageID}:${input.toolID}:path:${path}`,
           src: undefined,
           path,
@@ -195,6 +250,9 @@ export function merge(existing: readonly MediaItem[], incoming: readonly MediaIt
     if (!current) byKey.set(key, item)
     else if (current.src === undefined && item.src !== undefined)
       byKey.set(key, { ...item, time: current.time ?? item.time })
+    else if (current.src === undefined && current.tentative && !item.tentative)
+      // A firm mention of the same path confirms a guessed one.
+      byKey.set(key, { ...current, tentative: false })
     else if (current.id === item.id) byKey.set(key, item)
   }
   return [...byKey.values()]

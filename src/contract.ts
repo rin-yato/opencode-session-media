@@ -17,11 +17,14 @@ export const MediaIpc = Ipc.define({
     /**
      * Pixel size of each image file, read from the header alone, in the order
      * asked. A file that is missing or unreadable answers 0 × 0. The layout needs
-     * every shape up front so tiles do not move as images load.
+     * every shape up front so tiles do not move as images load. `exists` tells a
+     * missing file from one that is there but whose size is unknown (both 0 × 0).
      */
     measure: {
       input: Schema.Array(Schema.String),
-      output: Schema.Array(Schema.Struct({ width: Schema.Number, height: Schema.Number })),
+      output: Schema.Array(
+        Schema.Struct({ width: Schema.Number, height: Schema.Number, exists: Schema.Boolean }),
+      ),
     },
     /**
      * Write bytes the app already holds (an attachment, a `read` result) to a

@@ -65,9 +65,11 @@ function Tile(props: {
 }) {
   const [near, setNear] = createSignal(false)
   const [loaded, setLoaded] = createSignal(false)
+  // A blob URL can be revoked before its `<img>` fires `load`; one retry re-reads it.
+  const [retried, setRetried] = createSignal(false)
   const [src] = createResource(
-    () => (near() && props.item.kind === "image" ? props.item : undefined),
-    (item) => sourceOf(item, props.read),
+    () => (near() && props.item.kind === "image" ? ([props.item, retried()] as const) : undefined),
+    ([item]) => sourceOf(item, props.read),
   )
 
   return (
@@ -94,6 +96,9 @@ function Tile(props: {
                 alt=""
                 draggable={false}
                 onLoad={() => setLoaded(true)}
+                onError={() => {
+                  if (!loaded() && !retried()) setRetried(true)
+                }}
                 style={{ opacity: loaded() ? "1" : "0" }}
               />
             )}
@@ -170,10 +175,14 @@ export function MediaPanel(props: { session: MountedSession }) {
       }
     })
     if (pending.length === 0) return
-    const settle = (sizes: readonly { width: number; height: number }[] | undefined) =>
+    const settle = (
+      sizes: readonly { width: number; height: number; exists: boolean }[] | undefined,
+    ) =>
       batch(() => {
         pending.forEach((item, index) => {
           const size = sizes?.[index]
+          // A guessed path with no file behind it is not media: it never joins the layout.
+          if (item.tentative && size && !size.exists) return
           setRatios(
             item.id,
             size && size.width > 0 && size.height > 0 ? size.width / size.height : FALLBACK_RATIO,
@@ -283,7 +292,7 @@ export function MediaPanel(props: { session: MountedSession }) {
     ctx.dialogs.open((dialog) => (
       <Lightbox
         // The images in display order, live: stepping follows what the grid shows.
-        items={() => items().filter((entry) => entry.kind === "image")}
+        items={() => known().filter((entry) => entry.kind === "image")}
         start={item.id}
         read={read}
         close={dialog.close}
