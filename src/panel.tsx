@@ -9,7 +9,7 @@ import {
   onMount,
   type JSX,
 } from "solid-js"
-import { usePlugin, type MountedSession } from "@opencode/plugin/gui"
+import { usePlugin, type MountedSession, type UiMenuEntry } from "@opencode/plugin/gui"
 import { MediaIpc } from "./contract"
 import { displayName, type MediaItem } from "./extract"
 import { DENSITIES, groupItems, layoutGrid, relativeTime, type Box, type Density } from "./grid"
@@ -29,15 +29,18 @@ import {
 const muted = "color-mix(in srgb, currentColor 65%, transparent)"
 const GAP = 8
 const CAPTION = 24
-const HEADER = 28
-const GROUP_GAP = 20
+const HEADER = 24
+const GROUP_GAP = 16
 
 /** How far outside the viewport a tile starts loading, so scrolling never shows an empty tile. */
 const LOAD_MARGIN = "700px 0px"
 
 const css = `
+.sm-cell { position: absolute; }
+.sm-actions { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 120ms ease; }
+.sm-cell:hover .sm-actions, .sm-cell:focus-within .sm-actions { opacity: 1; }
 .sm-tile {
-  position: absolute; padding: 0; border: 0; color: inherit;
+  position: absolute; inset: 0; padding: 0; border: 0; color: inherit;
   display: flex; flex-direction: column; text-align: left; background: none;
   transition: transform 140ms ease;
 }
@@ -56,19 +59,20 @@ const css = `
 }
 .sm-caption > span { overflow: hidden; text-overflow: ellipsis; }
 .sm-header {
-  position: absolute; display: flex; align-items: flex-end; gap: 8px; padding: 0 2px 4px; font-size: 12px;
+  position: absolute; display: flex; align-items: flex-end; gap: 8px; padding: 0 2px 6px; font-size: 12px;
   color: ${muted}; white-space: nowrap; min-width: 0;
 }
 .sm-header b { font-weight: 600; color: color-mix(in srgb, currentColor 85%, transparent); flex: none; }
 .sm-header .sm-tools { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sm-header .sm-count { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+.sm-header .sm-count { margin-left: auto; flex: none; font-size: 11px; line-height: 1.4; padding: 1px 6px; border-radius: 999px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, currentColor 8%, transparent); color: color-mix(in srgb, currentColor 60%, transparent); }
 .sm-state { display: grid; place-items: center; align-content: center; justify-items: center; gap: 12px; height: 100%; text-align: center; }
 .sm-state > div { max-width: 240px; font-size: 13px; color: ${muted}; }
 .sm-state .sm-glyph { opacity: .4; }
+.sm-state > div.sm-title { font-size: 13px; font-weight: 600; color: color-mix(in srgb, currentColor 85%, transparent); margin-bottom: -6px; }
 .sm-note { display: grid; place-items: center; align-content: center; gap: 8px; height: 100%; padding: 8px; text-align: center; color: color-mix(in srgb, currentColor 55%, transparent); }
 .sm-badge { font-size: 10px; font-weight: 600; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, currentColor 10%, transparent); }
 .sm-gone { position: absolute; inset: 0; display: grid; place-items: center; color: color-mix(in srgb, currentColor 35%, transparent); }
-@media (prefers-reduced-motion: reduce) { .sm-tile, .sm-frame, .sm-img { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sm-tile, .sm-frame, .sm-img, .sm-actions { transition: none; } }
 `
 
 /**
@@ -87,6 +91,7 @@ function Tile(props: {
   /** The tiny icon before the caption. */
   mark?: JSX.Element
   onOpen: () => void
+  openExternal: () => void
 }) {
   const ctx = usePlugin()
   const [near, setNear] = createSignal(false)
@@ -100,47 +105,82 @@ function Tile(props: {
       thumbOf(item, props.read, (path, maxSize) => ctx.main(MediaIpc).thumb({ path, maxSize })),
   )
 
+  const actions = (): UiMenuEntry[] => {
+    const item = props.item
+    const path = item.path
+    const entries: UiMenuEntry[] = [
+      { label: ctx.t("open.external"), icon: "arrow-up-right", onSelect: props.openExternal },
+    ]
+    if (path) {
+      entries.push({
+        label: ctx.t("copy.path"),
+        icon: "copy",
+        onSelect: () => {
+          navigator.clipboard.writeText(path).then(
+            () => ctx.toast.show({ title: ctx.t("copy.done"), variant: "success" }),
+            () => ctx.toast.show({ title: ctx.t("copy.failed"), variant: "error" }),
+          )
+        },
+      })
+      const desktop = ctx.desktop
+      if (desktop)
+        entries.push({
+          label: ctx.t("reveal"),
+          icon: "folder",
+          onSelect: () => void desktop.reveal(path).catch(() => {}),
+        })
+    }
+    return entries
+  }
+
   return (
-    <button
-      type="button"
-      class="sm-tile"
+    <div
+      class="sm-cell"
       ref={(element) => onCleanup(props.track(element, () => setNear(true)))}
-      onClick={props.onOpen}
-      title={props.item.path ?? props.item.name ?? props.item.mime}
       style={{
-        display: props.box ? "flex" : "none",
+        display: props.box ? "block" : "none",
         left: `${props.box?.left ?? 0}px`,
         top: `${props.box?.top ?? 0}px`,
         width: `${props.box?.width ?? 0}px`,
         height: `${props.box?.height ?? 0}px`,
       }}
     >
-      <div class="sm-frame">
-        <Show when={props.item.kind === "image"} fallback={props.icon}>
-          <Show when={!src.error} fallback={<div class="sm-gone">{props.gone}</div>}>
-            <Show when={src()}>
-              {(url) => (
-                <img
-                  class="sm-img"
-                  src={url()}
-                  alt=""
-                  draggable={false}
-                  onLoad={() => setLoaded(true)}
-                  onError={() => {
-                    if (!loaded() && !retried()) setRetried(true)
-                  }}
-                  style={{ opacity: loaded() ? "1" : "0" }}
-                />
-              )}
+      <button type="button" class="sm-tile" data-id={props.item.id} onClick={props.onOpen}>
+        <div class="sm-frame">
+          <Show when={props.item.kind === "image"} fallback={props.icon}>
+            <Show when={!src.error} fallback={<div class="sm-gone">{props.gone}</div>}>
+              <Show when={src()}>
+                {(url) => (
+                  <img
+                    class="sm-img"
+                    src={url()}
+                    alt=""
+                    draggable={false}
+                    onLoad={() => setLoaded(true)}
+                    onError={() => {
+                      if (!loaded() && !retried()) setRetried(true)
+                    }}
+                    style={{ opacity: loaded() ? "1" : "0" }}
+                  />
+                )}
+              </Show>
             </Show>
           </Show>
-        </Show>
+        </div>
+        <div class="sm-caption">
+          {props.mark}
+          <ctx.ui.Tooltip
+            value={props.item.path ?? props.item.name ?? props.item.mime}
+            placement="bottom"
+          >
+            <span>{displayName(props.item.name ?? props.item.path) ?? props.item.mime}</span>
+          </ctx.ui.Tooltip>
+        </div>
+      </button>
+      <div class="sm-actions">
+        <ctx.ui.Menu label={ctx.t("actions")} items={actions()} />
       </div>
-      <div class="sm-caption">
-        {props.mark}
-        <span>{displayName(props.item.name ?? props.item.path) ?? props.item.mime}</span>
-      </div>
-    </button>
+    </div>
   )
 }
 
@@ -345,7 +385,15 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
         items={() => flat().filter((entry) => entry.kind === "image")}
         start={item.id}
         read={read}
-        close={dialog.close}
+        onClose={(id) => {
+          dialog.close()
+          // After the host has put focus back, land on the tile of the image last shown.
+          setTimeout(() => {
+            const tile = scroller?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`)
+            tile?.focus({ preventScroll: true })
+            tile?.scrollIntoView({ block: "nearest" })
+          }, 0)
+        }}
         openExternal={(entry) => void openExternal(entry)}
       />
     ))
@@ -377,6 +425,7 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
         <Show when={statusFor(props.session.key) === "ready" && items().length === 0}>
           <div class="sm-state">
             <ui.Icon class="sm-glyph" name="photo" size="large" />
+            <div class="sm-title">{ctx.t("empty.title")}</div>
             <div>{ctx.t("empty")}</div>
           </div>
         </Show>
@@ -432,6 +481,7 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
                     </div>
                   }
                   onOpen={() => open(item())}
+                  openExternal={() => void openExternal(item())}
                 />
               )
             }}

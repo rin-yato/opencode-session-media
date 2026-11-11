@@ -37,6 +37,8 @@ Same flow as `opencode-simulator`. Every push to `main` runs `.github/workflows/
 - i18n placeholders use `{{count}}`, double braces.
 - `effect` is pinned to the version `@opencode/plugin` expects.
 - The viewer root sets `pointer-events: auto`; the host dialog layer disables it.
+- The size menu lives in `Slot` `session.panel.end` and shows while the Media tab is `visible`; Media is a side panel, so that is the side region. The host exposes no finer check.
+- Lightbox tooltips are our own CSS (`.sm-tip`): the host's portal tooltips could sit under the viewer's layer.
 - No telemetry or outbound requests.
 
 ## Verify

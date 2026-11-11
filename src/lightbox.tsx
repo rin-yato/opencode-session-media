@@ -26,6 +26,16 @@ const css = `
 .sm-button:hover { background: rgba(255,255,255,.24) !important }
 .sm-button:active { transform: scale(.94) }
 .sm-bar { cursor: default }
+.sm-tip { position: relative; display: inline-flex; min-width: 0 }
+.sm-tip::after {
+  content: attr(data-tip); position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%);
+  padding: 4px 8px; border-radius: 6px; background: rgba(0,0,0,.85); color: rgba(255,255,255,.92);
+  font-size: 11px; line-height: 1.3; white-space: nowrap; max-width: 70vw; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; opacity: 0; transition: opacity 100ms ease; z-index: 1;
+}
+.sm-tip.sm-up::after { top: auto; bottom: calc(100% + 8px) }
+.sm-tip:hover::after, .sm-tip:focus-within:has(:focus-visible)::after { opacity: 1; transition-delay: 400ms }
+.sm-tip:not(:hover):not(:focus-within)::after { transition-delay: 0s }
 .sm-bar button, .sm-bar [data-component] { color: rgba(255,255,255,.88) !important; }
 .sm-bar button:hover { background: rgba(255,255,255,.16) !important; }
 .sm-bar button:focus-visible, .sm-button:focus-visible { outline: 2px solid rgba(255,255,255,.7); outline-offset: 2px; }
@@ -33,7 +43,7 @@ const css = `
 .sm-button, .sm-button * { cursor: default }
 .sm-button > * { pointer-events: none }
 @media (prefers-reduced-motion: reduce) {
-  .sm-lightbox, .sm-image, .sm-button { animation: none; transition: none }
+  .sm-lightbox, .sm-image, .sm-button, .sm-tip::after { animation: none; transition: none }
 }
 `
 
@@ -60,7 +70,8 @@ export function Lightbox(props: {
   items: () => readonly MediaItem[]
   start: string
   read: ReadFile
-  close: () => void
+  /** Called with the ID of the image on screen, so focus can return to its tile. */
+  onClose: (id: string) => void
   openExternal: (item: MediaItem) => void
 }) {
   const ctx = usePlugin()
@@ -115,11 +126,7 @@ export function Lightbox(props: {
   })
 
   onMount(() => {
-    // Return focus to whatever opened the viewer (the tile) when it closes.
-    const opener =
-      document.activeElement instanceof HTMLElement ? document.activeElement : undefined
     closeHost?.querySelector("button")?.focus()
-    onCleanup(() => opener?.focus())
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Tab" && root) {
         const stops = [...root.querySelectorAll<HTMLElement>("button:not([disabled])")]
@@ -140,7 +147,7 @@ export function Lightbox(props: {
       // Capture phase: the app's own shortcuts must not also see these keys.
       event.preventDefault()
       event.stopPropagation()
-      if (by === 0) props.close()
+      if (by === 0) props.onClose(id())
       else step(by)
     }
     const onResize = () => setView({ width: window.innerWidth, height: window.innerHeight })
@@ -163,7 +170,7 @@ export function Lightbox(props: {
       aria-label={displayName(current()?.name ?? current()?.path) ?? ctx.t("panel.title")}
       ref={(element) => (root = element)}
       onClick={(event) => {
-        if (event.target === event.currentTarget) props.close()
+        if (event.target === event.currentTarget) props.onClose(id())
       }}
       style={{
         position: "fixed",
@@ -239,7 +246,7 @@ export function Lightbox(props: {
       >
         <Show when={current()}>
           {(item) => (
-            <ui.Tooltip value={ctx.t("open.external")} placement="bottom">
+            <span class="sm-tip" data-tip={ctx.t("open.external")}>
               <ui.IconButton
                 icon="arrow-up-right"
                 label={ctx.t("open.external")}
@@ -247,19 +254,19 @@ export function Lightbox(props: {
                 variant="ghost"
                 onClick={() => props.openExternal(item())}
               />
-            </ui.Tooltip>
+            </span>
           )}
         </Show>
         <span ref={(element) => (closeHost = element)} style={{ display: "contents" }}>
-          <ui.Tooltip value={ctx.t("close")} placement="bottom">
+          <span class="sm-tip" data-tip={ctx.t("close")}>
             <ui.IconButton
               icon="close"
               label={ctx.t("close")}
               size="large"
               variant="ghost"
-              onClick={props.close}
+              onClick={() => props.onClose(id())}
             />
-          </ui.Tooltip>
+          </span>
         </span>
       </div>
 
@@ -299,9 +306,8 @@ export function Lightbox(props: {
           "font-size": "12px",
           "font-variant-numeric": "tabular-nums",
           "max-width": "80vw",
-          overflow: "hidden",
-          "text-overflow": "ellipsis",
-          "white-space": "nowrap",
+          display: "flex",
+          "white-space": "pre",
         }}
       >
         <span aria-live="polite">
@@ -312,9 +318,18 @@ export function Lightbox(props: {
         </span>
         <Show when={displayName(current()?.name ?? current()?.path)}>
           {(name) => (
-            <ui.Tooltip value={current()?.path ?? current()?.name ?? name()} placement="top">
-              <span style={count() > 1 ? { opacity: "0.7" } : {}}>{name()}</span>
-            </ui.Tooltip>
+            <span class="sm-tip sm-up" data-tip={current()?.path ?? current()?.name ?? name()}>
+              <span
+                style={{
+                  ...(count() > 1 ? { opacity: "0.7" } : {}),
+                  overflow: "hidden",
+                  "text-overflow": "ellipsis",
+                  "max-width": "50vw",
+                }}
+              >
+                {name()}
+              </span>
+            </span>
           )}
         </Show>
       </div>
