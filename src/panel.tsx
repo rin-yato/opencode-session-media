@@ -10,19 +10,11 @@ import {
   type JSX,
 } from "solid-js"
 import { usePlugin, type MountedSession } from "@opencode/plugin/gui"
-import { Schema } from "effect"
 import { MediaIpc } from "./contract"
 import { displayName, type MediaItem } from "./extract"
-import {
-  DENSITIES,
-  groupItems,
-  isDensity,
-  layoutGrid,
-  relativeTime,
-  type Box,
-  type Density,
-} from "./grid"
+import { DENSITIES, groupItems, layoutGrid, relativeTime, type Box, type Density } from "./grid"
 import { Lightbox } from "./lightbox"
+import { extensionOf, toolLabel } from "./labels"
 import { thumbOf, type ReadFile } from "./source"
 import {
   errorFor,
@@ -34,13 +26,11 @@ import {
   type Loader,
 } from "./store"
 
-const muted = "color-mix(in srgb, currentColor 60%, transparent)"
+const muted = "color-mix(in srgb, currentColor 65%, transparent)"
 const GAP = 8
-const CAPTION = 22
-const HEADER = 26
-const GROUP_GAP = 14
-
-const Prefs = Schema.Struct({ density: Schema.String })
+const CAPTION = 24
+const HEADER = 28
+const GROUP_GAP = 20
 
 /** How far outside the viewport a tile starts loading, so scrolling never shows an empty tile. */
 const LOAD_MARGIN = "700px 0px"
@@ -62,16 +52,21 @@ const css = `
 .sm-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; transition: opacity 180ms ease; }
 .sm-caption {
   display: flex; align-items: center; gap: 4px; flex: none; height: ${CAPTION}px; padding: 0 2px;
-  font-size: 11px; color: ${muted}; white-space: nowrap; min-width: 0;
+  font-size: 12px; color: ${muted}; white-space: nowrap; min-width: 0;
 }
 .sm-caption > span { overflow: hidden; text-overflow: ellipsis; }
 .sm-header {
-  position: absolute; display: flex; align-items: flex-end; padding: 0 2px 4px; font-size: 12px;
-  color: ${muted}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  position: absolute; display: flex; align-items: flex-end; gap: 8px; padding: 0 2px 4px; font-size: 12px;
+  color: ${muted}; white-space: nowrap; min-width: 0;
 }
-.sm-header b { font-weight: 600; color: inherit; margin-right: 6px; }
-.sm-note { display: grid; place-items: center; height: 100%; padding: 8px; text-align: center; font-size: 11px; }
+.sm-header b { font-weight: 600; color: color-mix(in srgb, currentColor 85%, transparent); flex: none; }
+.sm-header .sm-tools { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sm-header .sm-count { margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+.sm-state { display: grid; place-items: center; align-content: center; justify-items: center; gap: 12px; height: 100%; text-align: center; }
+.sm-state > div { max-width: 240px; font-size: 13px; color: ${muted}; }
+.sm-state .sm-glyph { opacity: .4; }
+.sm-note { display: grid; place-items: center; align-content: center; gap: 8px; height: 100%; padding: 8px; text-align: center; color: color-mix(in srgb, currentColor 55%, transparent); }
+.sm-badge { font-size: 10px; font-weight: 600; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, currentColor 10%, transparent); }
 .sm-gone { position: absolute; inset: 0; display: grid; place-items: center; color: color-mix(in srgb, currentColor 35%, transparent); }
 @media (prefers-reduced-motion: reduce) { .sm-tile, .sm-frame, .sm-img { transition: none; } }
 `
@@ -90,7 +85,7 @@ function Tile(props: {
   gone: JSX.Element
   icon: JSX.Element
   /** The tiny icon before the caption. */
-  mark: JSX.Element
+  mark?: JSX.Element
   onOpen: () => void
 }) {
   const ctx = usePlugin()
@@ -149,15 +144,13 @@ function Tile(props: {
   )
 }
 
-export function MediaPanel(props: { session: MountedSession }) {
+export function MediaPanel(props: { session: MountedSession; density: () => Density }) {
   const ctx = usePlugin()
   const ui = ctx.ui
   const [width, setWidth] = createSignal(0)
   /** Path-only items whose file exists; the rest stay out of the grid. */
   const [confirmed, setConfirmed] = createSignal<ReadonlySet<string>>(new Set())
-  // Density persists in the plugin's own storage; until it loads, show the default.
-  const prefs = ctx.storage.store("prefs", { schema: Prefs, initial: { density: "M" } })
-  const density = (): Density => (isDensity(prefs.value?.density) ? prefs.value.density : "M")
+  const density = () => props.density()
   // Keeps relative times fresh.
   const [now, setNow] = createSignal(Date.now())
   const tick = setInterval(() => setNow(Date.now()), 30_000)
@@ -172,6 +165,11 @@ export function MediaPanel(props: { session: MountedSession }) {
     list: (input) => session.server.client.message.list(input),
     get: (input) => session.server.client.session.message.get(input),
   })
+
+  const retry = () => {
+    const session = props.session
+    if (!session.pending) void loadAll(session.key, session.id, loader(session))
+  }
 
   // The panel stays mounted when the user switches sessions, so follow the key.
   createEffect(() => {
@@ -258,9 +256,12 @@ export function MediaPanel(props: { session: MountedSession }) {
   })
 
   const headline = (group: ReturnType<typeof groups>[number]) => {
-    const parts = [...group.tools]
+    const parts = group.tools.map((tool) => {
+      const label = toolLabel(tool)
+      return "key" in label ? ctx.t(`tool.${label.key}`) : label.text
+    })
     if (group.attached) parts.push(ctx.t("group.attached"))
-    return [relativeTime(group.time, now(), ctx.locale.locale()), parts.join(", ")]
+    return [relativeTime(group.time, now(), ctx.locale.locale()), parts.join(", ")] as const
   }
 
   // One observer for every tile: a tile loads its picture the first time it comes near the viewport.
@@ -354,37 +355,30 @@ export function MediaPanel(props: { session: MountedSession }) {
     <div style={{ height: "100%", display: "flex", "flex-direction": "column" }}>
       <style>{css}</style>
       <div
-        style={{
-          display: "flex",
-          "justify-content": "flex-end",
-          "align-items": "center",
-          padding: `4px ${GAP}px`,
-          flex: "none",
-        }}
-      >
-        <ui.Menu
-          label={ctx.t("density")}
-          icon="sliders"
-          placement="bottom-end"
-          items={(Object.keys(DENSITIES) as Density[]).map((size) => ({
-            label: ctx.t(`density.${size}`),
-            ...(density() === size ? { icon: "check" as const } : {}),
-            onSelect: () => prefs.set({ density: size }),
-          }))}
-        />
-      </div>
-      <div
         ref={scroller}
-        style={{ flex: "1 1 0", "min-height": "0", overflow: "auto", padding: `${GAP}px` }}
+        style={{ flex: "1 1 0", "min-height": "0", overflow: "auto", padding: "8px 12px 16px" }}
       >
-        <Show when={statusFor(props.session.key) === "loading" && items().length === 0}>
-          <ui.Loader size="large" />
-        </Show>
-        <Show when={statusFor(props.session.key) === "error"}>
-          <div style={{ color: muted }}>{errorFor(props.session.key)}</div>
+        <Show
+          when={items().length === 0 && ["loading", "error"].includes(statusFor(props.session.key))}
+        >
+          <div class="sm-state">
+            <Show
+              when={statusFor(props.session.key) === "error"}
+              fallback={<ui.Loader size="large" />}
+            >
+              <ui.Icon class="sm-glyph" name="photo" size="large" />
+              <div>{errorFor(props.session.key) ?? ctx.t("load.failed")}</div>
+              <ui.Button variant="ghost" size="small" onClick={retry}>
+                {ctx.t("retry")}
+              </ui.Button>
+            </Show>
+          </div>
         </Show>
         <Show when={statusFor(props.session.key) === "ready" && items().length === 0}>
-          <div style={{ color: muted, padding: "8px" }}>{ctx.t("empty")}</div>
+          <div class="sm-state">
+            <ui.Icon class="sm-glyph" name="photo" size="large" />
+            <div>{ctx.t("empty")}</div>
+          </div>
         </Show>
 
         <div
@@ -406,7 +400,8 @@ export function MediaPanel(props: { session: MountedSession }) {
                       }}
                     >
                       <b>{headline(group)[0]}</b>
-                      {headline(group)[1]} · {group.items.length}
+                      <span class="sm-tools">{headline(group)[1]}</span>
+                      <span class="sm-count">{group.items.length}</span>
                     </div>
                   )}
                 </Show>
@@ -424,14 +419,16 @@ export function MediaPanel(props: { session: MountedSession }) {
                   track={track}
                   gone={<ui.Icon name="outline-photo" size="large" />}
                   mark={
-                    <ui.Icon name={item().origin === "user" ? "prompt" : "photo"} size="small" />
+                    <Show when={item().origin === "user"}>
+                      <ui.Icon name="prompt" size="small" />
+                    </Show>
                   }
                   icon={
-                    <div class="sm-note" style={{ "word-break": "break-all" }}>
-                      <div>
-                        <ui.Icon name="folder" size="large" />
-                        <div>{displayName(item().name) ?? item().mime}</div>
-                      </div>
+                    <div class="sm-note">
+                      <ui.Icon name="file-document" size="large" />
+                      <span class="sm-badge">
+                        {extensionOf(item().name ?? item().path, item().mime)}
+                      </span>
                     </div>
                   }
                   onOpen={() => open(item())}
