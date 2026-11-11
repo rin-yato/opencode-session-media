@@ -77,6 +77,7 @@ your default app.
 
 ## Notes
 
+- The panel reads the newest part of the history first and loads older media as you scroll to the end of the grid, so long sessions open quickly.
 - A path a tool merely mentioned (no bytes) shows only if the file exists on disk; mentions of files that never existed stay out of the grid. If a shown file is later deleted, its tile turns into a quiet placeholder unless the app still holds its bytes.
 - Disk reads are limited to absolute image paths up to 20 MB.
 - The viewer's **↗** button opens the image in your default app. That takes focus from OpenCode, so it is opt-in.

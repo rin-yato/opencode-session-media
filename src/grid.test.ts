@@ -111,13 +111,33 @@ describe("groupItems", () => {
     expect(groups[1]!.tools).toEqual(["screenshot"])
   })
 
-  test("falls back to the message when the turn is unknown", () => {
+  test("falls back to the message when there is no time or the item is an attachment", () => {
     const groups = groupItems([
-      item("a", { messageID: "m1" }),
-      item("b", { messageID: "m2", time: 5 }),
+      item("a", { messageID: "m1", time: undefined }),
+      item("b", { messageID: "m2", time: undefined }),
+      item("c", { messageID: "m3", origin: "user" }),
     ])
-    expect(groups.map((g) => g.key)).toEqual(["m2", "m1"])
-    expect(groups[0]!.time).toBe(5)
+    expect(groups.map((g) => g.key)).toEqual(["m3", "m2", "m1"])
+  })
+
+  test("items with no known prompt yet share one group, so a later prompt cannot shrink the grid", () => {
+    const loose = [
+      item("a", { messageID: "m1", time: 1 }),
+      item("b", { messageID: "m2", time: 2 }),
+      item("c", { messageID: "m3", time: 3 }),
+    ]
+    const before = groupItems(loose)
+    expect(before.map((g) => g.key)).toEqual(["unlinked"])
+    expect(before[0]!.items).toHaveLength(3)
+    // The prompt for all three arrives: still one group, in the same place.
+    const after = groupItems(loose.map((i) => ({ ...i, turn: "p0", turnTime: 0 })))
+    expect(after.map((g) => g.key)).toEqual(["p0"])
+    expect(after[0]!.items.map((i) => i.id)).toEqual(before[0]!.items.map((i) => i.id))
+  })
+
+  test("group keys are stable across regrouping of the same items", () => {
+    const items = [item("a", { turn: "t1", turnTime: 1 }), item("b", { turn: "t2", turnTime: 2 })]
+    expect(groupItems(items).map((g) => g.key)).toEqual(groupItems([...items]).map((g) => g.key))
   })
 
   test("flags user attachments and skips missing tools", () => {

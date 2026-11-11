@@ -278,14 +278,27 @@ export function assignTurns(
   const sorted = starts.toSorted((a, b) => a.time - b.time)
   return items.map((item) => {
     if (item.origin === "user" || item.time === undefined) return item
-    let found: TurnStart | undefined
-    for (const start of sorted) {
-      if (start.time > item.time) break
-      found = start
+    // The latest start at or before the item: binary search over the sorted starts.
+    let low = 0
+    let high = sorted.length
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (sorted[mid]!.time <= item.time) low = mid + 1
+      else high = mid
     }
+    const found = low > 0 ? sorted[low - 1] : undefined
     if (item.turn === found?.id && item.turnTime === found?.time) return item
     return { ...item, turn: found?.id, turnTime: found?.time }
   })
+}
+
+/** Shallow equality of two items; a re-read of an unchanged item keeps the old object, so nothing downstream re-renders. */
+function sameFields(a: MediaItem, b: MediaItem): boolean {
+  const left = a as unknown as Record<string, unknown>
+  const right = b as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  for (const key of keys) if (left[key] !== right[key]) return false
+  return true
 }
 
 /**
@@ -305,7 +318,7 @@ export function merge(existing: readonly MediaItem[], incoming: readonly MediaIt
     else if (current.src === undefined && current.tentative && !item.tentative)
       // A firm mention of the same path confirms a guessed one.
       byKey.set(key, { ...current, tentative: false })
-    else if (current.id === item.id) byKey.set(key, item)
+    else if (current.id === item.id) byKey.set(key, sameFields(current, item) ? current : item)
   }
   return [...byKey.values()]
 }

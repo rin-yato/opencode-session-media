@@ -98,6 +98,18 @@ export interface Group {
   readonly attached: boolean
 }
 
+/** Key of the group that holds items whose prompt has not been read yet. */
+export const UNLINKED = "unlinked"
+
+/**
+ * The turn, else for an assistant item with a time the shared "unlinked" group, else
+ * its message. Unlinked items must share one group: if each sat in a group of its
+ * own, the prompt arriving later (an older page) would merge them all into one turn
+ * and the grid would shrink under the user's scroll position.
+ */
+export const groupKeyOf = (item: MediaItem): string =>
+  item.turn ?? (item.origin !== "user" && item.time !== undefined ? UNLINKED : item.messageID)
+
 /**
  * Group items (oldest first, as the store keeps them) by turn: newest group
  * first, newest item first inside. An item whose turn is unknown is grouped by
@@ -106,7 +118,7 @@ export interface Group {
 export function groupItems(items: readonly MediaItem[]): Group[] {
   const byKey = new Map<string, MediaItem[]>()
   for (const item of items.toReversed()) {
-    const key = item.turn ?? item.messageID
+    const key = groupKeyOf(item)
     const list = byKey.get(key)
     if (list) list.push(item)
     else byKey.set(key, [item])

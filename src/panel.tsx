@@ -3,10 +3,10 @@ import {
   Show,
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   onCleanup,
   onMount,
+  untrack,
   type JSX,
 } from "solid-js"
 import { usePlugin, type MountedSession, type UiMenuEntry } from "@opencode/plugin/gui"
@@ -14,12 +14,16 @@ import { MediaIpc } from "./contract"
 import { displayName, type MediaItem } from "./extract"
 import { DENSITIES, groupItems, layoutGrid, relativeTime, type Box, type Density } from "./grid"
 import { Lightbox } from "./lightbox"
+import { createLoad } from "./load"
 import { extensionOf, toolLabel } from "./labels"
 import { thumbOf, type ReadFile } from "./source"
 import {
   errorFor,
+  hasMoreFor,
   loadAll,
+  loadingMoreFor,
   loadNew,
+  loadOlder,
   mediaFor,
   refreshMessage,
   statusFor,
@@ -117,7 +121,8 @@ function Tile(props: {
   const [loaded, setLoaded] = createSignal(false)
   // A blob URL can be revoked before its `<img>` fires `load`; one retry re-reads it.
   const [retried, setRetried] = createSignal(false)
-  const [src] = createResource(
+  // Not a resource: one would suspend OpenCode's session screen (see `createLoad`).
+  const { value: src, failed } = createLoad(
     () => (near() && props.item.kind === "image" ? ([props.item, retried()] as const) : undefined),
     // A small copy: tiles are a few hundred px wide. The viewer opens the full image.
     ([item]) =>
@@ -173,7 +178,7 @@ function Tile(props: {
       <button type="button" class="sm-tile" data-id={props.item.id} onClick={props.onOpen}>
         <div class="sm-frame">
           <Show when={props.item.kind === "image"} fallback={props.icon}>
-            <Show when={!src.error} fallback={<div class="sm-gone">{props.gone}</div>}>
+            <Show when={!failed()} fallback={<div class="sm-gone">{props.gone}</div>}>
               <Show when={src()}>
                 {(url) => (
                   <img
@@ -227,6 +232,7 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
   onCleanup(() => clearInterval(tick))
   let scroller: HTMLDivElement | undefined
   let inner: HTMLDivElement | undefined
+  let sentinel: HTMLDivElement | undefined
 
   // Read the Ipc where it is used: it follows main across restarts.
   const read: ReadFile = (path) => ctx.main(MediaIpc).read(path)
@@ -241,29 +247,68 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
     if (!session.pending) void loadAll(session.key, session.id, loader(session))
   }
 
+  /**
+   * A loader that always reads the latest session object: the host hands over a new
+   * object on a route change, and a load must not run against a stale one.
+   */
+  const source: Loader = {
+    list: (input) => loader(untrack(() => props.session)).list(input),
+    get: (input) => loader(untrack(() => props.session)).get(input),
+  }
+
+  // What a load depends on. A new session object with the same key, ID, server and
+  // pending state is not a new session, so it does not re-run the effect below.
+  const identity = createMemo(
+    () => ({
+      key: props.session.key,
+      id: props.session.id,
+      pending: !!props.session.pending,
+      server: props.session.server,
+    }),
+    undefined,
+    {
+      equals: (a, b) =>
+        a.key === b.key && a.id === b.id && a.pending === b.pending && a.server === b.server,
+    },
+  )
+
   // The panel stays mounted when the user switches sessions, so follow the key.
   createEffect(() => {
-    const session = props.session
-    const key = session.key
-    const sessionID = session.id
-    const source = loader(session)
-    if (session.pending) return
-    void loadAll(key, sessionID, source)
+    const { key, id: sessionID, pending, server } = identity()
+    if (pending) return
+
+    // Let the panel paint before the first read; a long history is parsed after it.
+    const start = () => void loadAll(key, sessionID, source)
+    if (typeof requestIdleCallback === "function") {
+      const handle = requestIdleCallback(start, { timeout: 400 })
+      onCleanup(() => cancelIdleCallback(handle))
+    } else {
+      const handle = setTimeout(start, 50)
+      onCleanup(() => clearTimeout(handle))
+    }
 
     // Tools that print a file path (screenshots inside `execute`) carry no file
     // part, so refresh on every completed tool, not only the ones with files.
-    const stopTool = session.server.data.on("session.tool.success", (event) => {
+    const stopTool = server.data.on("session.tool.success", (event) => {
       if (event.data.sessionID !== sessionID) return
       void refreshMessage(key, sessionID, event.data.assistantMessageID, source)
     })
     // A prompt with attachments is not a tool result; pick those up when a run ends.
-    const stopRun = session.server.data.on("session.execution.succeeded", (event) => {
+    const stopRun = server.data.on("session.execution.succeeded", (event) => {
       if (event.data.sessionID === sessionID) void loadNew(key, sessionID, source)
     })
     onCleanup(() => {
       stopTool()
       stopRun()
     })
+  })
+
+  // Older history loads while the end of the grid is in view (and again as long as it stays so).
+  const [atEnd, setAtEnd] = createSignal(false)
+  createEffect(() => {
+    const { key, id, pending } = identity()
+    if (pending || !atEnd() || !hasMoreFor(key) || loadingMoreFor(key)) return
+    void loadOlder(key, id, source)
   })
 
   // Items with bytes join the grid at once. A path-only item (a path some text merely
@@ -293,6 +338,10 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
 
   /** Groups by turn, newest first; the order the grid and the viewer both use. */
   const groups = createMemo(() => groupItems(items()))
+  // Headers are keyed by group key, not by group object: `groupItems` returns new objects on
+  // every update, and a keyed-by-object list would unmount and remount every header per page.
+  const groupKeys = createMemo(() => groups().map((group) => group.key))
+  const groupByKey = createMemo(() => new Map(groups().map((group) => [group.key, group])))
   const flat = createMemo(() => groups().flatMap((group) => group.items))
   const byId = createMemo(() => new Map(flat().map((item) => [item.id, item])))
   const ids = createMemo(() => flat().map((item) => item.id))
@@ -369,6 +418,14 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
     )
     for (const element of watched.keys()) observer.observe(element)
     onCleanup(() => observer?.disconnect())
+    if (sentinel) {
+      const end = new IntersectionObserver(([entry]) => setAtEnd(entry?.isIntersecting ?? false), {
+        root: scroller ?? null,
+        rootMargin: "0px 0px 400px 0px",
+      })
+      end.observe(sentinel)
+      onCleanup(() => end.disconnect())
+    }
   })
 
   /** Hand an inline item to the main process as a temp file the system viewer can open. */
@@ -464,10 +521,11 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
           ref={inner}
           style={{ position: "relative", width: "100%", height: `${arranged().height}px` }}
         >
-          <For each={groups()}>
-            {(group) => {
+          <For each={groupKeys()}>
+            {(groupKey) => {
+              const group = () => groupByKey().get(groupKey)!
               return (
-                <Show when={arranged().headers.get(group.key)}>
+                <Show when={arranged().headers.get(groupKey)}>
                   {(box) => (
                     <div
                       class="sm-header"
@@ -478,9 +536,9 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
                         height: `${box().height}px`,
                       }}
                     >
-                      <b>{headline(group)[0]}</b>
-                      <span class="sm-tools">{headline(group)[1]}</span>
-                      <span class="sm-count">{group.items.length}</span>
+                      <b>{headline(group())[0]}</b>
+                      <span class="sm-tools">{headline(group())[1]}</span>
+                      <span class="sm-count">{group().items.length}</span>
                     </div>
                   )}
                 </Show>
@@ -516,6 +574,20 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
               )
             }}
           </For>
+        </div>
+        {/* The end zone keeps one height while older history exists, so the loader appearing never moves the scroll height. */}
+        <div
+          ref={sentinel}
+          style={{
+            height: hasMoreFor(props.session.key) ? "44px" : "1px",
+            display: "grid",
+            "place-items": "center",
+            color: muted,
+          }}
+        >
+          <Show when={loadingMoreFor(props.session.key)}>
+            <ui.Loader size="small" />
+          </Show>
         </div>
       </div>
     </div>

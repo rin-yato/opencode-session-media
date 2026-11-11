@@ -39,6 +39,9 @@ Same flow as `opencode-simulator`. Every push to `main` runs `.github/workflows/
 - The viewer root sets `pointer-events: auto`; the host dialog layer disables it.
 - The size menu lives in `Slot` `session.panel.end` and shows while the Media tab is `visible`; Media is a side panel, so that is the side region. The host exposes no finer check.
 - Lightbox tooltips are our own CSS (`.sm-tip`): the host's portal tooltips could sit under the viewer's layer.
+- The first load is bounded: newest pages only (~100 messages, more only while no media is found); older pages load on scroll via `loadOlder`. The load effect is keyed on session key, ID, server and pending, never the session object, and starts from an idle callback.
+- Nothing already shown may shrink, remount or move while history loads. Items whose prompt is unread share one `unlinked` group (never one group per message: the prompt arriving would merge them and collapse the grid under the scroll position); headers are keyed by group key; `merge` keeps the old object for unchanged items; `walk` and `loadOlder` fold several pages into one store write.
+- Never use `createResource` (or anything that suspends) in the window. OpenCode wraps the session screen in `<Suspense>` (`app/src/shell/routes/routes.tsx`), so a pending read swaps the whole screen for a fallback and back, and every scroll position resets. Use `createLoad` (`src/load.ts`).
 - No telemetry or outbound requests.
 
 ## Verify

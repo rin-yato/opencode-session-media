@@ -1,16 +1,8 @@
-import {
-  Show,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  on,
-  onCleanup,
-  onMount,
-} from "solid-js"
+import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
 import { displayName, type MediaItem } from "./extract"
 import { fitWithin } from "./fit"
+import { createLoad } from "./load"
 import { sourceOf, type ReadFile } from "./source"
 
 /** Room kept around the image, as a share of the window. */
@@ -94,7 +86,8 @@ export function Lightbox(props: {
 
   // A blob URL can be revoked before its `<img>` loads; one retry per image re-reads it.
   const [retried, setRetried] = createSignal<string>()
-  const [src] = createResource(
+  // Not a resource: one would suspend OpenCode's session screen behind the viewer (see `createLoad`).
+  const { value: src, failed } = createLoad(
     () => {
       const item = current()
       return item ? ([item, retried() === item.id] as const) : undefined
@@ -190,7 +183,7 @@ export function Lightbox(props: {
       <style>{css}</style>
 
       <Show
-        when={!src.error}
+        when={!failed()}
         fallback={
           <div style={{ color: "rgba(255,255,255,.7)" }}>
             <ui.Icon name="outline-photo" size="large" />
