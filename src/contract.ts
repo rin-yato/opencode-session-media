@@ -15,6 +15,16 @@ export const MediaIpc = Ipc.define({
       }),
     },
     /**
+     * A downscaled copy of a PNG or JPEG, its longest side at most `maxSize`, for
+     * grid tiles. `null` means "use the original": the image is already small, or
+     * is a format the system cannot resize (GIF keeps its animation, WebP is not
+     * supported by the image API).
+     */
+    thumb: {
+      input: Schema.Struct({ path: Schema.String, maxSize: Schema.Number }),
+      output: Schema.NullOr(Schema.Struct({ mime: Schema.String, data: Schema.String })),
+    },
+    /**
      * Pixel size of each image file, read from the header alone, in the order
      * asked. A file that is missing or unreadable answers 0 × 0. The layout needs
      * every shape up front so tiles do not move as images load. `exists` tells a

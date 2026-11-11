@@ -17,8 +17,16 @@ import { displayName, type MediaItem } from "./extract"
 import { justify, targetHeight, type Box } from "./justify"
 import { Lightbox } from "./lightbox"
 import { inlineSize } from "./size"
-import { sourceOf, type ReadFile } from "./source"
-import { errorFor, loadAll, mediaFor, refreshMessage, statusFor, type Loader } from "./store"
+import { thumbOf, type ReadFile } from "./source"
+import {
+  errorFor,
+  loadAll,
+  loadNew,
+  mediaFor,
+  refreshMessage,
+  statusFor,
+  type Loader,
+} from "./store"
 
 const muted = "color-mix(in srgb, currentColor 60%, transparent)"
 const GAP = 8
@@ -63,13 +71,16 @@ function Tile(props: {
   icon: JSX.Element
   onOpen: () => void
 }) {
+  const ctx = usePlugin()
   const [near, setNear] = createSignal(false)
   const [loaded, setLoaded] = createSignal(false)
   // A blob URL can be revoked before its `<img>` fires `load`; one retry re-reads it.
   const [retried, setRetried] = createSignal(false)
   const [src] = createResource(
     () => (near() && props.item.kind === "image" ? ([props.item, retried()] as const) : undefined),
-    ([item]) => sourceOf(item, props.read),
+    // A small copy: tiles are a few hundred px wide. The viewer opens the full image.
+    ([item]) =>
+      thumbOf(item, props.read, (path, maxSize) => ctx.main(MediaIpc).thumb({ path, maxSize })),
   )
 
   return (
@@ -143,7 +154,7 @@ export function MediaPanel(props: { session: MountedSession }) {
     })
     // A prompt with attachments is not a tool result; pick those up when a run ends.
     const stopRun = session.server.data.on("session.execution.succeeded", (event) => {
-      if (event.data.sessionID === sessionID) void loadAll(key, sessionID, source)
+      if (event.data.sessionID === sessionID) void loadNew(key, sessionID, source)
     })
     onCleanup(() => {
       stopTool()

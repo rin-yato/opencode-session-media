@@ -2,10 +2,14 @@ import { createHash } from "node:crypto"
 import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
+import { nativeImage } from "electron"
 import type { Plugin } from "@opencode/plugin/gui"
 import { MediaIpc } from "./contract"
 import { mimeForPath } from "./extract"
 import { imageSize } from "./size"
+import { canThumb, thumbSize } from "./source"
+
+const JPEG_QUALITY = 80
 
 /** Large enough for a retina screenshot, small enough that a stray path cannot stall the app. */
 const MAX_BYTES = 20 * 1024 * 1024
@@ -68,6 +72,27 @@ export const main: Plugin.MainSetup = (ctx) => {
       if (info.size > MAX_BYTES) throw new Error("Image is too large")
       const bytes = await readFile(path)
       return { mime, data: bytes.toString("base64") }
+    },
+
+    thumb: async ({ path, maxSize }) => {
+      const mime = mimeForPath(path)
+      if (!mime || !isAbsolute(path)) throw new Error("Not an image path")
+      // nativeImage only documents PNG and JPEG; GIF (animated) and WebP go as they are.
+      if (!canThumb(mime)) return null
+      const info = await stat(path)
+      if (!info.isFile()) throw new Error("Not a file")
+      if (info.size > MAX_BYTES) throw new Error("Image is too large")
+      const image = nativeImage.createFromPath(path)
+      if (image.isEmpty()) return null
+      const size = image.getSize()
+      const target = thumbSize(size.width, size.height, maxSize)
+      if (!target) return null
+      const small = image.resize({ ...target, quality: "good" })
+      // JPEG stays JPEG at q80. PNG stays PNG: the API cannot tell whether it has
+      // transparency, and JPEG would turn that black.
+      return mime === "image/jpeg"
+        ? { mime, data: small.toJPEG(JPEG_QUALITY).toString("base64") }
+        : { mime, data: small.toPNG().toString("base64") }
     },
 
     measure: (paths) => Promise.all(paths.slice(0, MAX_MEASURE).map(measure)),
