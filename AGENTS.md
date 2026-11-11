@@ -29,7 +29,7 @@ Same flow as `opencode-simulator`. Every push to `main` runs `.github/workflows/
 ## Rules
 
 - Tiles are keyed by item and positioned absolutely. A resize may only rewrite positions. Never read the width inside anything that remounts tiles.
-- Cells are uniform 3:4, so layout never waits on image sizes. Only tentative items wait (for an exists check).
+- Cells are uniform squares, so layout never waits on image sizes. Only tentative items wait (for an exists check).
 - Turns: a user prompt plus later messages until the next prompt (no parent link in the API); the store assigns `turn` in `add`.
 - Items dedupe by file path in `merge`; the copy that has bytes wins.
 - Main reads only absolute-path png/jpg/gif/webp files up to 20 MB.

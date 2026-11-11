@@ -14,8 +14,8 @@ export type Density = keyof typeof DENSITIES
 export const isDensity = (value: unknown): value is Density =>
   value === "S" || value === "M" || value === "L"
 
-/** Image area aspect, width / height: every cell is a 3:4 portrait. */
-export const CELL_RATIO = 3 / 4
+/** Image area aspect, width / height: every cell is square. */
+export const CELL_RATIO = 1
 
 export interface GridOptions {
   readonly width: number
@@ -44,7 +44,7 @@ export interface GroupLayout {
  * of cells in group i; empty groups take no space. Everything is absolute, so a
  * resize or density change only rewrites numbers. Cells span the row exactly
  * (rounded cumulative edges, so widths differ by at most 1px) and share one
- * height: the 3:4 image area plus the caption.
+ * height: the square image area plus the caption.
  */
 export function layoutGrid(
   counts: readonly number[],

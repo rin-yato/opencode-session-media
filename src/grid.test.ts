@@ -53,10 +53,10 @@ describe("layoutGrid", () => {
     }
   })
 
-  test("cell height is a 3:4 image plus the caption", () => {
+  test("cell height is a square image plus the caption", () => {
     const { groups } = layoutGrid([2], { ...base, width: 408 }) // 2 cols, 200px cells
     expect(groups[0]!.cells[0]!.width).toBe(200)
-    expect(groups[0]!.cells[0]!.height).toBe(267 + 20)
+    expect(groups[0]!.cells[0]!.height).toBe(200 + 20)
   })
 
   test("header sits above its cells; rows wrap by column", () => {
@@ -65,8 +65,8 @@ describe("layoutGrid", () => {
     expect(g!.header).toEqual({ left: 0, top: 0, width: 408, height: 24 })
     expect(g!.cells[0]!.top).toBe(32)
     expect(g!.cells[1]!.top).toBe(32)
-    expect(g!.cells[2]!.top).toBe(32 + 287 + 8)
-    expect(height).toBe(32 + 287 + 8 + 287)
+    expect(g!.cells[2]!.top).toBe(32 + 220 + 8)
+    expect(height).toBe(32 + 220 + 8 + 220)
   })
 
   test("groups stack with the group gap, empty groups take no space", () => {
@@ -74,9 +74,9 @@ describe("layoutGrid", () => {
     expect(groups).toHaveLength(3)
     expect(groups[1]!.cells).toEqual([])
     expect(groups[1]!.header.height).toBe(0)
-    const end = 32 + 287
+    const end = 32 + 220
     expect(groups[2]!.header.top).toBe(end + 12)
-    expect(height).toBe(end + 12 + 32 + 287)
+    expect(height).toBe(end + 12 + 32 + 220)
   })
 
   test("no groups or only empty groups give zero height", () => {
