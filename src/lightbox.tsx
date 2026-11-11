@@ -9,7 +9,7 @@ import {
   onMount,
 } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
-import type { MediaItem } from "./extract"
+import { displayName, type MediaItem } from "./extract"
 import { fitWithin } from "./fit"
 import { sourceOf, type ReadFile } from "./source"
 
@@ -255,9 +255,16 @@ export function Lightbox(props: {
             color: "rgba(255,255,255,.85)",
             "font-size": "12px",
             "font-variant-numeric": "tabular-nums",
+            "max-width": "80vw",
+            overflow: "hidden",
+            "text-overflow": "ellipsis",
+            "white-space": "nowrap",
           }}
         >
           {index() + 1} / {count()}
+          <Show when={displayName(current()?.name ?? current()?.path)}>
+            {(name) => <span style={{ opacity: "0.7" }}> · {name()}</span>}
+          </Show>
         </div>
       </Show>
     </div>

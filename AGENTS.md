@@ -7,7 +7,7 @@ A GUI-only OpenCode Desktop plugin with no server part. It adds a **Media** pane
 - **GUI window** (`src/gui.tsx`, `src/panel.tsx`, `src/lightbox.tsx`): panel, menu item, command, viewer.
 - **GUI main** (`src/main.ts`, `src/contract.ts`): Electron main-process Ipc `opencode-session-media.files` with `read`, `measure`, `stage`.
 - **Data** (`src/store.ts`, `src/extract.ts`, `src/source.ts`): per-session media store, message-to-item extraction, image source loader.
-- **Layout** (`src/justify.ts`, `src/size.ts`, `src/fit.ts`): justified rows, header size parser, viewer fit.
+- **Layout** (`src/grid.ts`, `src/size.ts`, `src/fit.ts`): grouped uniform grid (pure `layoutGrid`, `groupItems`), header size parser, viewer fit.
 
 ## Commands
 
@@ -29,7 +29,8 @@ Same flow as `opencode-simulator`. Every push to `main` runs `.github/workflows/
 ## Rules
 
 - Tiles are keyed by item and positioned absolutely. A resize may only rewrite positions. Never read the width inside anything that remounts tiles.
-- Layout needs every aspect ratio before images load. Read it from headers, not by decoding.
+- Cells are uniform 3:4, so layout never waits on image sizes. Only tentative items wait (for an exists check).
+- Turns: a user prompt plus later messages until the next prompt (no parent link in the API); the store assigns `turn` in `add`.
 - Items dedupe by file path in `merge`; the copy that has bytes wins.
 - Main reads only absolute-path png/jpg/gif/webp files up to 20 MB.
 - Icon names must come from the host's `IconName` list (`photo`, not `image`).

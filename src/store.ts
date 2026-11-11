@@ -1,5 +1,12 @@
 import { createStore, produce } from "solid-js/store"
-import { fromMessage, merge, type MediaItem } from "./extract"
+import {
+  assignTurns,
+  fromMessage,
+  merge,
+  turnStartOf,
+  type MediaItem,
+  type TurnStart,
+} from "./extract"
 
 export interface Loader {
   list(input: {
@@ -13,13 +20,15 @@ export interface Loader {
 
 interface Entry {
   items: MediaItem[]
+  /** User prompts seen so far; each begins a turn. */
+  starts: TurnStart[]
   status: "idle" | "loading" | "ready" | "error"
   error: string | undefined
 }
 
 const [state, setState] = createStore<Record<string, Entry>>({})
 
-const blank = (): Entry => ({ items: [], status: "idle", error: undefined })
+const blank = (): Entry => ({ items: [], starts: [], status: "idle", error: undefined })
 
 /** Responses arrive as `{ data, cursor }`; tolerate an unwrapped array too. */
 function page(response: unknown): { messages: unknown[]; next: string | undefined } {
@@ -45,15 +54,29 @@ export const mediaFor = (key: string): readonly MediaItem[] => state[key]?.items
 export const statusFor = (key: string) => state[key]?.status ?? "idle"
 export const errorFor = (key: string) => state[key]?.error
 
-function add(key: string, incoming: readonly MediaItem[]) {
-  if (incoming.length === 0) return
+/** Fold items and newly seen prompts into a key's entry, re-linking turns. */
+function add(key: string, incoming: readonly MediaItem[], starts: readonly TurnStart[] = []) {
+  if (incoming.length === 0 && starts.length === 0) return
   setState(
     produce((draft) => {
       const entry = (draft[key] ??= blank())
-      entry.items = merge(entry.items, incoming).sort(messageOrder)
+      const known = new Set(entry.starts.map((start) => start.id))
+      const fresh = starts.filter((start) => !known.has(start.id))
+      if (fresh.length > 0) entry.starts = [...entry.starts, ...fresh]
+      entry.items = assignTurns(merge(entry.items, incoming).sort(messageOrder), entry.starts)
     }),
   )
 }
+
+const startsIn = (messages: readonly unknown[]) =>
+  messages.flatMap((message) => turnStartOf(message) ?? [])
+
+/** The newest prompt a key knows about, if any. */
+const latestStart = (key: string) =>
+  state[key]?.starts.reduce<number | undefined>(
+    (latest, start) => (latest === undefined || start.time > latest ? start.time : latest),
+    undefined,
+  )
 
 /** Message IDs a paged read has returned, per key. Never reactive. */
 const seen = new Map<string, Set<string>>()
@@ -95,7 +118,7 @@ async function walk(key: string, sessionID: string, loader: Loader): Promise<voi
       )
       const { messages, next } = page(response)
       remember(key, messages)
-      add(key, messages.flatMap(fromMessage))
+      add(key, messages.flatMap(fromMessage), startsIn(messages))
       if (!next || next === cursor) break
       cursor = next
     }
@@ -142,16 +165,9 @@ async function walkNew(key: string, sessionID: string, loader: Loader): Promise<
     // Pages arrive newest-first; the store is oldest-first.
     const ordered = fresh.reverse().flatMap((messages) => messages.toReversed())
     remember(key, ordered)
-    const incoming = ordered.flatMap(fromMessage)
-    if (incoming.length === 0) return
-    setState(
-      produce((draft) => {
-        const entry = (draft[key] ??= blank())
-        // Items a live refresh added may already sit after older ones; sorting by
-        // message creation time restores the order.
-        entry.items = merge(entry.items, incoming).sort(messageOrder)
-      }),
-    )
+    // Items a live refresh added may already sit after older ones; `add` sorts
+    // by message creation time to restore the order, and re-links turns.
+    add(key, ordered.flatMap(fromMessage), startsIn(ordered))
   } catch {
     // Keep what is shown; the next run retries.
   }
@@ -190,6 +206,9 @@ export function loadNew(key: string, sessionID: string, loader: Loader): Promise
   )
 }
 
+/** Per key, the messages a prompt probe already ran for: at most one probe per message. */
+const probed = new Map<string, Set<string>>()
+
 /** Re-read one message after a tool finished, so new media shows up live. */
 export async function refreshMessage(
   key: string,
@@ -200,7 +219,21 @@ export async function refreshMessage(
   try {
     const response = await loader.get({ sessionID, messageID })
     const body = response as { data?: unknown } | undefined
-    add(key, fromMessage(body && "data" in body && body.data ? body.data : response))
+    const message = body && "data" in body && body.data ? body.data : response
+    const items = fromMessage(message)
+    add(key, items)
+    // A single message does not name its prompt. If it is newer than every
+    // prompt known, the prompt has not been loaded yet: read the newest few
+    // messages once to learn it. Once learned, the rest of the turn costs nothing.
+    const time = items.find((item) => item.time !== undefined)?.time
+    const latest = latestStart(key)
+    const asked = probed.get(key) ?? new Set<string>()
+    probed.set(key, asked)
+    if (time !== undefined && (latest === undefined || time > latest) && !asked.has(messageID)) {
+      asked.add(messageID)
+      const recent = page(await loader.list({ sessionID, limit: 20, order: "desc" })).messages
+      add(key, [], startsIn(recent))
+    }
   } catch {
     // The next full load picks it up.
   }

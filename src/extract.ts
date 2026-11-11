@@ -19,6 +19,14 @@ export interface MediaItem {
   readonly messageID: string
   readonly time: number | undefined
   /**
+   * The turn this item belongs to: the ID of the user prompt that started it.
+   * Undefined until the store links it (see `assignTurns`); grouping then falls
+   * back to `messageID`.
+   */
+  readonly turn?: string | undefined
+  /** When that turn's prompt was sent. */
+  readonly turnTime?: number | undefined
+  /**
    * Guessed from free text (an unquoted path with spaces) and possibly not a
    * path at all: the panel shows it only once the file is known to exist.
    */
@@ -212,6 +220,9 @@ export function fromMessage(message: unknown): MediaItem[] {
         tool: undefined,
         messageID,
         time,
+        // A prompt starts its own turn.
+        turn: messageID,
+        turnTime: time,
       })
     })
     return items
@@ -234,6 +245,47 @@ export function fromMessage(message: unknown): MediaItem[] {
   }
 
   return []
+}
+
+/** A user prompt, which begins a turn. */
+export interface TurnStart {
+  readonly id: string
+  readonly time: number
+}
+
+/** The start of the turn a stored message is, if it is a user prompt with a time. */
+export function turnStartOf(message: unknown): TurnStart | undefined {
+  if (!isRecord(message) || message.type !== "user") return undefined
+  const id = str(message.id)
+  const time =
+    isRecord(message.time) && typeof message.time.created === "number"
+      ? message.time.created
+      : undefined
+  return id && time !== undefined ? { id, time } : undefined
+}
+
+/**
+ * Link items to turns. The API has no parent link between an assistant message
+ * and its prompt, so a turn is: a user prompt plus every later message up to
+ * the next prompt. An item belongs to the latest prompt created at or before it.
+ * Items before any known prompt, or without a time, keep `turn` undefined (the
+ * grid then groups them by message). Returns the same array when nothing changes.
+ */
+export function assignTurns(
+  items: readonly MediaItem[],
+  starts: readonly TurnStart[],
+): MediaItem[] {
+  const sorted = starts.toSorted((a, b) => a.time - b.time)
+  return items.map((item) => {
+    if (item.origin === "user" || item.time === undefined) return item
+    let found: TurnStart | undefined
+    for (const start of sorted) {
+      if (start.time > item.time) break
+      found = start
+    }
+    if (item.turn === found?.id && item.turnTime === found?.time) return item
+    return { ...item, turn: found?.id, turnTime: found?.time }
+  })
 }
 
 /**

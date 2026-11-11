@@ -158,3 +158,44 @@ describe("store", () => {
     expect(ids("time")).toEqual(["msg_b", "msg_a"])
   })
 })
+
+describe("turns", () => {
+  const user = (id: string, n: number) => ({ id, type: "user", time: { created: n } })
+  const assistant = (id: string, n: number) => ({
+    id,
+    type: "assistant",
+    time: { created: n },
+    content: [
+      {
+        type: "tool",
+        id: `t_${id}`,
+        name: "screenshot",
+        state: {
+          status: "completed",
+          content: [{ type: "file", uri: "data:image/png;base64,AAAA", mime: "image/png" }],
+        },
+      },
+    ],
+  })
+
+  test("links assistant media to the prompt before it, on full and live loads", async () => {
+    const history = [user("u1", 1), assistant("a1", 2), user("u2", 10), assistant("a2", 11)]
+    const loader: Loader = {
+      async list(input) {
+        const data = input.order === "desc" ? history.toReversed() : history
+        return { data, cursor: { next: null } }
+      },
+      async get() {
+        return { data: assistant("a3", 12) }
+      },
+    }
+    await loadAll("turns", "ses", loader)
+    expect(mediaFor("turns").map((item) => [item.messageID, item.turn])).toEqual([
+      ["a1", "u1"],
+      ["a2", "u2"],
+    ])
+    // A live refresh of a message in the same turn joins it; the probe reads the prompt list.
+    await refreshMessage("turns", "ses", "a3", loader)
+    expect(mediaFor("turns").at(-1)?.turn).toBe("u2")
+  })
+})

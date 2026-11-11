@@ -12,14 +12,15 @@
 </p>
 
 <p align="center">
-  <img src="./screenshot.jpg" alt="The Media panel beside a session, showing screenshots in justified rows" width="900" />
+  <img src="./screenshot.jpg" alt="The Media panel beside a session, showing screenshots in a grouped grid" width="900" />
 </p>
 
 Adds a **Media** tab to a session's side panel. It gathers the images the agent
 read, the screenshots it took, and the files you attached, newest first, so you
 can find that one screenshot without scrolling the chat.
 
-- **Justified rows.** Images fill the panel width at their true shape, with no cropping. Phone screenshots and wide captures sit side by side.
+- **Grouped grid.** Uniform 3:4 cells, never cropped, with the file name underneath. Items are grouped by turn (the prompt and the work that followed), newest first, each group headed by when it happened, the tools involved, and a count.
+- **Density.** Switch between small, medium, and large thumbnails; the choice is remembered.
 - **Resizes cleanly.** Resizing the panel only repositions tiles. Nothing reloads.
 - **In-app viewer.** Click an image for a full-window view. `←` and `→` step through, `Esc` closes.
 - **Live.** New images appear as tools finish.
