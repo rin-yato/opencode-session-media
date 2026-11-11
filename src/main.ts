@@ -2,10 +2,14 @@ import { createHash } from "node:crypto"
 import { mkdir, open, readFile, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join } from "node:path"
+import { nativeImage } from "electron"
 import type { Plugin } from "@opencode/plugin/gui"
 import { MediaIpc } from "./contract"
 import { mimeForPath } from "./extract"
 import { imageSize } from "./size"
+import { canThumb, thumbSize } from "./source"
+
+const JPEG_QUALITY = 80
 
 /** Large enough for a retina screenshot, small enough that a stray path cannot stall the app. */
 const MAX_BYTES = 20 * 1024 * 1024
@@ -24,29 +28,36 @@ const EXTENSION: Record<string, string> = {
 /** A header fits in far less; this covers a JPEG with a large embedded thumbnail before its frame header. */
 const HEAD_BYTES = 1024 * 1024
 const MAX_MEASURE = 500
-const UNKNOWN = { width: 0, height: 0 }
+const MISSING = { width: 0, height: 0, exists: false }
+const UNSIZED = { width: 0, height: 0, exists: true }
 
-/** An image file's pixel size, read without loading the whole file. */
-async function measure(path: string): Promise<{ width: number; height: number }> {
+/** An image file's pixel size, read without loading the whole file; `exists` is false when there is no such file. */
+async function measure(path: string): Promise<{ width: number; height: number; exists: boolean }> {
   try {
-    if (!mimeForPath(path) || !isAbsolute(path)) return UNKNOWN
+    if (!mimeForPath(path) || !isAbsolute(path)) return MISSING
     const info = await stat(path)
-    if (!info.isFile()) return UNKNOWN
-    const handle = await open(path, "r")
+    if (!info.isFile()) return MISSING
     try {
-      const head = Buffer.alloc(Math.min(info.size, HEAD_BYTES))
-      await handle.read(head, 0, head.length, 0)
-      const found = imageSize(head)
-      if (found) return found
-    } finally {
-      await handle.close()
+      const handle = await open(path, "r")
+      try {
+        const head = Buffer.alloc(Math.min(info.size, HEAD_BYTES))
+        await handle.read(head, 0, head.length, 0)
+        const found = imageSize(head)
+        if (found) return { ...found, exists: true }
+      } finally {
+        await handle.close()
+      }
+      // The size sat past the first megabyte: read the file once more, within the usual cap.
+      if (info.size > HEAD_BYTES && info.size <= MAX_BYTES) {
+        const found = imageSize(await readFile(path))
+        if (found) return { ...found, exists: true }
+      }
+    } catch {
+      // Present but unreadable: the size is unknown.
     }
-    // The size sat past the first megabyte: read the file once more, within the usual cap.
-    if (info.size > HEAD_BYTES && info.size <= MAX_BYTES)
-      return imageSize(await readFile(path)) ?? UNKNOWN
-    return UNKNOWN
+    return UNSIZED
   } catch {
-    return UNKNOWN
+    return MISSING
   }
 }
 
@@ -61,6 +72,27 @@ export const main: Plugin.MainSetup = (ctx) => {
       if (info.size > MAX_BYTES) throw new Error("Image is too large")
       const bytes = await readFile(path)
       return { mime, data: bytes.toString("base64") }
+    },
+
+    thumb: async ({ path, maxSize }) => {
+      const mime = mimeForPath(path)
+      if (!mime || !isAbsolute(path)) throw new Error("Not an image path")
+      // nativeImage only documents PNG and JPEG; GIF (animated) and WebP go as they are.
+      if (!canThumb(mime)) return null
+      const info = await stat(path)
+      if (!info.isFile()) throw new Error("Not a file")
+      if (info.size > MAX_BYTES) throw new Error("Image is too large")
+      const image = nativeImage.createFromPath(path)
+      if (image.isEmpty()) return null
+      const size = image.getSize()
+      const target = thumbSize(size.width, size.height, maxSize)
+      if (!target) return null
+      const small = image.resize({ ...target, quality: "good" })
+      // JPEG stays JPEG at q80. PNG stays PNG: the API cannot tell whether it has
+      // transparency, and JPEG would turn that black.
+      return mime === "image/jpeg"
+        ? { mime, data: small.toJPEG(JPEG_QUALITY).toString("base64") }
+        : { mime, data: small.toPNG().toString("base64") }
     },
 
     measure: (paths) => Promise.all(paths.slice(0, MAX_MEASURE).map(measure)),

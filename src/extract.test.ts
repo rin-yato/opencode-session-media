@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { displayName, fromMessage, fromToolContent, imagePathsIn, kindOf, merge } from "./extract"
+import {
+  displayName,
+  fromMessage,
+  fromToolContent,
+  imageMentionsIn,
+  imagePathsIn,
+  kindOf,
+  merge,
+} from "./extract"
 
 const png = "data:image/png;base64,iVBORw0KGgo="
 
@@ -81,6 +89,105 @@ describe("paths named in tool text", () => {
 
   test("imagePathsIn normalizes file:// URLs and dedupes", () => {
     expect(imagePathsIn("file:///tmp/a.png then /tmp/a.png")).toEqual(["/tmp/a.png"])
+  })
+
+  test("imagePathsIn reads quoted paths with spaces", () => {
+    const p = "/Users/me/Desktop/Screenshot 2026-11-11 at 10.00.00.png"
+    expect(imagePathsIn(`saved "${p}" ok`)).toEqual([p])
+    expect(imagePathsIn(`saved '${p}'`)).toEqual([p])
+    expect(imagePathsIn(`saved \`${p}\``)).toEqual([p])
+    expect(imagePathsIn(`"/my dir/sub dir/a b.png"`)).toEqual(["/my dir/sub dir/a b.png"])
+  })
+
+  test("imagePathsIn unescapes backslash-escaped spaces", () => {
+    expect(imagePathsIn("open /Users/me/My\\ Shot.png now")).toEqual(["/Users/me/My Shot.png"])
+    expect(imagePathsIn("/Users/me/My\\ Dir/My\\ Shot.png")).toEqual([
+      "/Users/me/My Dir/My Shot.png",
+    ])
+  })
+
+  test("imagePathsIn decodes file:// URLs", () => {
+    expect(imagePathsIn("file:///Users/me/My%20Shot.png")).toEqual(["/Users/me/My Shot.png"])
+    expect(imagePathsIn("file:///tmp/bad%E0%A4%A.png")).toEqual(["/tmp/bad%E0%A4%A.png"])
+  })
+
+  test("imagePathsIn allows spaces only in the basename", () => {
+    expect(
+      imagePathsIn("Saved to /Users/me/Desktop/Screenshot 2026-11-11 at 10.00.00.png"),
+    ).toEqual(["/Users/me/Desktop/Screenshot 2026-11-11 at 10.00.00.png"])
+    expect(imagePathsIn("/a/x.txt and /b/y.png")).toEqual(["/b/y.png"])
+    expect(imagePathsIn("/tmp/a.png and /tmp/b.png")).toEqual(["/tmp/a.png", "/tmp/b.png"])
+    expect(imagePathsIn("/my dir/a.png")).toEqual([])
+  })
+
+  test("imagePathsIn keeps order of first appearance across forms", () => {
+    expect(imagePathsIn(`/z.png "/a b.png" file:///c.png /z.png`)).toEqual([
+      "/z.png",
+      "/a b.png",
+      "/c.png",
+    ])
+  })
+
+  test("imagePathsIn negatives", () => {
+    expect(imagePathsIn("https://x.com/a.png")).toEqual([])
+    expect(imagePathsIn('"https://x.com/a b.png" ~/a.png C:\\a.png')).toEqual([])
+    expect(imagePathsIn("src/a b.png")).toEqual([])
+  })
+
+  test("imagePathsIn accepts a known false positive for sentence text", () => {
+    // Bare text before an image name reads as a basename with spaces.
+    expect(imagePathsIn("see /tmp/out then photo.png")).toEqual(["/tmp/out then photo.png"])
+  })
+
+  test("only unquoted paths with unescaped spaces are tentative", () => {
+    const flags = (text: string) => imageMentionsIn(text).map((m) => [m.path, m.tentative])
+    expect(flags("see /tmp/out then photo.png")).toEqual([["/tmp/out then photo.png", true]])
+    expect(flags('"/tmp/a b.png" /tmp/c.png /tmp/d\\ e.png file:///tmp/f%20g.png')).toEqual([
+      ["/tmp/a b.png", false],
+      ["/tmp/c.png", false],
+      ["/tmp/d e.png", false],
+      ["/tmp/f g.png", false],
+    ])
+    // A firm mention of the same path outweighs a guessed one.
+    expect(flags('/tmp/a b.png "/tmp/a b.png"')).toEqual([["/tmp/a b.png", false]])
+  })
+
+  test("fromToolContent marks guessed paths tentative", () => {
+    const items = fromToolContent({
+      messageID: "m",
+      toolID: "t",
+      tool: "execute",
+      time: 1,
+      content: [{ type: "text", text: "Saved to /tmp/Shot 1.png and /tmp/b.png" }],
+    })
+    expect(items.map((item) => [item.path, item.tentative])).toEqual([
+      ["/tmp/Shot 1.png", true],
+      ["/tmp/b.png", false],
+    ])
+  })
+
+  test("merge: bytes or a firm mention end a tentative item", () => {
+    const text = (body: string, toolID: string) =>
+      fromToolContent({
+        messageID: "m",
+        toolID,
+        tool: "execute",
+        time: 1,
+        content: [{ type: "text", text: body }],
+      })
+    const guess = text("saved /tmp/Shot 1.png", "a")
+    const read = fromToolContent({
+      messageID: "m2",
+      toolID: "r",
+      tool: "read",
+      time: 2,
+      content: [{ type: "file", uri: png, mime: "image/png", name: "/tmp/Shot 1.png" }],
+    })
+    expect(merge(guess, read)[0]?.tentative).toBeFalsy()
+    expect(merge(read, guess)[0]?.tentative).toBeFalsy()
+    const firm = text('saved "/tmp/Shot 1.png"', "b")
+    expect(merge(guess, firm)[0]?.tentative).toBe(false)
+    expect(merge(guess, guess)[0]?.tentative).toBe(true)
   })
 
   test("a tool result that only names a file becomes a disk-backed item", () => {

@@ -50,23 +50,51 @@ function add(key: string, incoming: readonly MediaItem[]) {
   setState(
     produce((draft) => {
       const entry = (draft[key] ??= blank())
-      entry.items = merge(entry.items, incoming)
+      entry.items = merge(entry.items, incoming).sort(messageOrder)
     }),
   )
 }
 
+/** Message IDs a paged read has returned, per key. Never reactive. */
+const seen = new Map<string, Set<string>>()
+/** The load running for a key, and the one follow-up queued behind it. */
+const running = new Map<string, Promise<void>>()
+const queued = new Map<string, Promise<void>>()
+
+const idOf = (message: unknown): string | undefined => {
+  const id = (message as { id?: unknown } | null)?.id
+  return typeof id === "string" ? id : undefined
+}
+
+// Message IDs are not ordered by creation time (two created a millisecond apart
+// can sort either way), so order by the message's created time. The sort is
+// stable, so items of one message keep their order.
+const messageOrder = (a: MediaItem, b: MediaItem) => (a.time ?? 0) - (b.time ?? 0)
+
+/** Never walk more pages than this; guards against a server that loops its cursor. */
+const MAX_PAGES = 200
+
+function remember(key: string, messages: readonly unknown[]) {
+  let ids = seen.get(key)
+  if (!ids) seen.set(key, (ids = new Set()))
+  for (const message of messages) {
+    const id = idOf(message)
+    if (id) ids.add(id)
+  }
+}
+
 /** Walk the whole message history once, oldest first. */
-export async function loadAll(key: string, sessionID: string, loader: Loader): Promise<void> {
+async function walk(key: string, sessionID: string, loader: Loader): Promise<void> {
   ensure(key)
   setState(key, { status: "loading", error: undefined })
   try {
     let cursor: string | undefined
-    // Guard against a server that keeps handing back the same cursor.
-    for (let pages = 0; pages < 200; pages++) {
+    for (let pages = 0; pages < MAX_PAGES; pages++) {
       const response = await loader.list(
         cursor ? { sessionID, limit: 100, cursor } : { sessionID, limit: 100, order: "asc" },
       )
       const { messages, next } = page(response)
+      remember(key, messages)
       add(key, messages.flatMap(fromMessage))
       if (!next || next === cursor) break
       cursor = next
@@ -78,6 +106,88 @@ export async function loadAll(key: string, sessionID: string, loader: Loader): P
       error: cause instanceof Error ? cause.message : String(cause),
     })
   }
+}
+
+/**
+ * Read only what is new: page newest-first and stop after the first page that
+ * contains an already-seen message (or when history ends).
+ *
+ * What "seen" means: a message ID that a *paged read* has returned. It is
+ * deliberately not set by `refreshMessage`, because a message refreshed mid-run
+ * can still gain tool results. Even a seen message can change (a run in
+ * flight when the panel mounted), so the stop is per page, not per message:
+ * the newest page is always re-read and merged in full, and everything that can
+ * still change lives at the tail, inside that page. Only history older than the
+ * first page holding a seen message is skipped.
+ *
+ * A failure keeps the items and the `ready` status; the next run retries.
+ */
+async function walkNew(key: string, sessionID: string, loader: Loader): Promise<void> {
+  try {
+    const known = seen.get(key) ?? new Set<string>()
+    const fresh: unknown[][] = []
+    let cursor: string | undefined
+    for (let pages = 0; pages < MAX_PAGES; pages++) {
+      const response = await loader.list(
+        cursor
+          ? { sessionID, limit: 20, order: "desc", cursor }
+          : { sessionID, limit: 20, order: "desc" },
+      )
+      const { messages, next } = page(response)
+      fresh.push(messages)
+      if (messages.some((message) => known.has(idOf(message) ?? ""))) break
+      if (!next || next === cursor) break
+      cursor = next
+    }
+    // Pages arrive newest-first; the store is oldest-first.
+    const ordered = fresh.reverse().flatMap((messages) => messages.toReversed())
+    remember(key, ordered)
+    const incoming = ordered.flatMap(fromMessage)
+    if (incoming.length === 0) return
+    setState(
+      produce((draft) => {
+        const entry = (draft[key] ??= blank())
+        // Items a live refresh added may already sit after older ones; sorting by
+        // message creation time restores the order.
+        entry.items = merge(entry.items, incoming).sort(messageOrder)
+      }),
+    )
+  } catch {
+    // Keep what is shown; the next run retries.
+  }
+}
+
+/**
+ * Run `task` for a key, one at a time. A call made while one runs shares a
+ * single follow-up run, so no event is lost and calls do not pile up.
+ */
+function serialize(key: string, task: () => Promise<void>): Promise<void> {
+  const current = running.get(key)
+  if (!current) {
+    const started = task().finally(() => {
+      if (running.get(key) === started) running.delete(key)
+    })
+    running.set(key, started)
+    return started
+  }
+  const waiting = queued.get(key)
+  if (waiting) return waiting
+  const next = current.then(() => {
+    queued.delete(key)
+    return serialize(key, task)
+  })
+  queued.set(key, next)
+  return next
+}
+
+/**
+ * Load a session: a full walk the first time (or after an error), only what is
+ * new afterwards. Use it on mount, session switch, and when a run ends.
+ */
+export function loadNew(key: string, sessionID: string, loader: Loader): Promise<void> {
+  return serialize(key, () =>
+    state[key]?.status === "ready" ? walkNew(key, sessionID, loader) : walk(key, sessionID, loader),
+  )
 }
 
 /** Re-read one message after a tool finished, so new media shows up live. */
@@ -95,3 +205,5 @@ export async function refreshMessage(
     // The next full load picks it up.
   }
 }
+
+export const loadAll = loadNew
