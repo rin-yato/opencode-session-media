@@ -11,7 +11,6 @@ export default Plugin.define({
       "command.open": "Open session media",
       close: "Close",
       empty: "Nothing yet. Images and files the agent reads or captures will show up here.",
-      missing: "File no longer exists",
       "open.failed": "Couldn't open the file",
       "open.desktopOnly": "Opening in another app needs the desktop app.",
       "open.external": "Open in default app",

@@ -47,7 +47,7 @@ const LOAD_MARGIN = "700px 0px"
 
 const css = `
 .sm-tile {
-  position: absolute; padding: 0; border: 0; cursor: pointer; color: inherit;
+  position: absolute; padding: 0; border: 0; color: inherit;
   display: flex; flex-direction: column; text-align: left; background: none;
   transition: transform 140ms ease;
 }
@@ -55,11 +55,10 @@ const css = `
 .sm-tile:focus-visible { outline: 2px solid color-mix(in srgb, currentColor 60%, transparent); outline-offset: 2px; border-radius: 8px; }
 .sm-frame {
   position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; border-radius: 8px;
-  background: color-mix(in srgb, currentColor 7%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
-  transition: box-shadow 140ms ease;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  transition: background-color 140ms ease;
 }
-.sm-tile:hover .sm-frame { box-shadow: inset 0 0 0 2px color-mix(in srgb, currentColor 42%, transparent); }
+.sm-tile:hover .sm-frame { background: color-mix(in srgb, currentColor 12%, transparent); }
 .sm-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; transition: opacity 180ms ease; }
 .sm-caption {
   display: flex; align-items: center; gap: 4px; flex: none; height: ${CAPTION}px; padding: 0 2px;
@@ -72,13 +71,8 @@ const css = `
   border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent);
 }
 .sm-header b { font-weight: 600; color: inherit; margin-right: 6px; }
-.sm-density { display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, currentColor 8%, transparent); }
-.sm-density button {
-  border: 0; padding: 2px 9px; border-radius: 6px; background: none; color: ${muted};
-  font-size: 11px; cursor: pointer;
-}
-.sm-density button[aria-pressed="true"] { background: color-mix(in srgb, currentColor 16%, transparent); color: inherit; }
 .sm-note { display: grid; place-items: center; height: 100%; padding: 8px; text-align: center; font-size: 11px; }
+.sm-gone { position: absolute; inset: 0; display: grid; place-items: center; color: color-mix(in srgb, currentColor 35%, transparent); }
 @media (prefers-reduced-motion: reduce) { .sm-tile, .sm-frame, .sm-img { transition: none; } }
 `
 
@@ -92,7 +86,8 @@ function Tile(props: {
   box: Box | undefined
   read: ReadFile
   track: (element: Element, onNear: () => void) => () => void
-  missing: string
+  /** Quiet stand-in when the file can no longer be read. */
+  gone: JSX.Element
   icon: JSX.Element
   /** The tiny icon before the caption. */
   mark: JSX.Element
@@ -127,7 +122,7 @@ function Tile(props: {
     >
       <div class="sm-frame">
         <Show when={props.item.kind === "image"} fallback={props.icon}>
-          <Show when={!src.error} fallback={<span class="sm-note">{props.missing}</span>}>
+          <Show when={!src.error} fallback={<div class="sm-gone">{props.gone}</div>}>
             <Show when={src()}>
               {(url) => (
                 <img
@@ -158,7 +153,7 @@ export function MediaPanel(props: { session: MountedSession }) {
   const ctx = usePlugin()
   const ui = ctx.ui
   const [width, setWidth] = createSignal(0)
-  /** Tentative items whose file exists; the rest stay out of the grid. */
+  /** Path-only items whose file exists; the rest stay out of the grid. */
   const [confirmed, setConfirmed] = createSignal<ReadonlySet<string>>(new Set())
   // Density persists in the plugin's own storage; until it loads, show the default.
   const prefs = ctx.storage.store("prefs", { schema: Prefs, initial: { density: "M" } })
@@ -203,19 +198,23 @@ export function MediaPanel(props: { session: MountedSession }) {
     })
   })
 
-  // Items join the grid at once; only a guessed path waits for its file to exist.
+  // Items with bytes join the grid at once. A path-only item (a path some text merely
+  // mentioned) waits until main says its file exists; unknown counts as not existing.
   const items = createMemo(() =>
-    mediaFor(props.session.key).filter((item) => !item.tentative || confirmed().has(item.id)),
+    mediaFor(props.session.key).filter(
+      (item) => item.src !== undefined || confirmed().has(item.id),
+    ),
   )
   const checked = new Set<string>()
   createEffect(() => {
     const pending = mediaFor(props.session.key).filter(
-      (item) => item.tentative && item.path && !checked.has(item.id),
+      (item) => item.src === undefined && item.path && !checked.has(item.id),
     )
     if (pending.length === 0) return
     for (const item of pending) checked.add(item.id)
     const settle = (sizes: readonly { exists: boolean }[] | undefined) => {
-      const ok = pending.filter((_, index) => sizes?.[index]?.exists)
+      // Only an explicit `true` counts; a missing answer stays hidden.
+      const ok = pending.filter((_, index) => sizes?.[index]?.exists === true)
       if (ok.length > 0) setConfirmed((set) => new Set([...set, ...ok.map((item) => item.id)]))
     }
     ctx
@@ -358,24 +357,21 @@ export function MediaPanel(props: { session: MountedSession }) {
         style={{
           display: "flex",
           "justify-content": "flex-end",
-          padding: `${GAP}px ${GAP}px 0`,
+          "align-items": "center",
+          padding: `4px ${GAP}px`,
           flex: "none",
         }}
       >
-        <div class="sm-density" role="group" aria-label={ctx.t("density")}>
-          <For each={Object.keys(DENSITIES) as Density[]}>
-            {(size) => (
-              <button
-                type="button"
-                aria-pressed={density() === size}
-                title={ctx.t(`density.${size}`)}
-                onClick={() => prefs.set({ density: size })}
-              >
-                {size}
-              </button>
-            )}
-          </For>
-        </div>
+        <ui.Menu
+          label={ctx.t("density")}
+          icon="sliders"
+          placement="bottom-end"
+          items={(Object.keys(DENSITIES) as Density[]).map((size) => ({
+            label: ctx.t(`density.${size}`),
+            ...(density() === size ? { icon: "check" as const } : {}),
+            onSelect: () => prefs.set({ density: size }),
+          }))}
+        />
       </div>
       <div
         ref={scroller}
@@ -426,7 +422,7 @@ export function MediaPanel(props: { session: MountedSession }) {
                   box={arranged().boxes.get(id)}
                   read={read}
                   track={track}
-                  missing={ctx.t("missing")}
+                  gone={<ui.Icon name="outline-photo" size="large" />}
                   mark={
                     <ui.Icon name={item().origin === "user" ? "prompt" : "photo"} size="small" />
                   }

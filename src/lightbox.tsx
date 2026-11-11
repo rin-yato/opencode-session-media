@@ -25,6 +25,9 @@ const css = `
 .sm-button { transition: background-color 120ms ease, transform 120ms ease }
 .sm-button:hover { background: rgba(255,255,255,.24) !important }
 .sm-button:active { transform: scale(.94) }
+/* The host's icon can swallow pointer events; keep hover on the button itself. */
+.sm-button, .sm-button * { cursor: default }
+.sm-button > * { pointer-events: none }
 @media (prefers-reduced-motion: reduce) {
   .sm-lightbox, .sm-image, .sm-button { animation: none; transition: none }
 }
@@ -40,7 +43,6 @@ const button = {
   "border-radius": "999px",
   background: "rgba(255,255,255,.13)",
   color: "white",
-  cursor: "pointer",
 } as const
 
 /**
@@ -155,7 +157,11 @@ export function Lightbox(props: {
 
       <Show
         when={!src.error}
-        fallback={<div style={{ color: "rgba(255,255,255,.7)" }}>{ctx.t("missing")}</div>}
+        fallback={
+          <div style={{ color: "rgba(255,255,255,.7)" }}>
+            <ui.Icon name="outline-photo" size="large" />
+          </div>
+        }
       >
         <Show when={src()} fallback={<ui.Loader size="large" />}>
           {(url) => (
