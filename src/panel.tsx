@@ -29,21 +29,31 @@ import {
 const muted = "color-mix(in srgb, currentColor 65%, transparent)"
 const GAP = 8
 const CAPTION = 24
-const HEADER = 24
-const GROUP_GAP = 16
+const HEADER = 16
+const GROUP_GAP = 24
 
 /** How far outside the viewport a tile starts loading, so scrolling never shows an empty tile. */
 const LOAD_MARGIN = "700px 0px"
 
 const css = `
 .sm-cell { position: absolute; }
-.sm-actions {
-  position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 120ms ease;
-  border-radius: 6px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);
+.sm-actions { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 120ms ease; display: flex; }
+/* One control: the trigger button is the surface; its own hover and background are overridden. */
+.sm-actions button {
+  width: 26px !important; height: 26px !important; min-width: 0 !important; padding: 0 !important;
+  border-radius: 6px !important; border: 1px solid rgba(0,0,0,.1) !important;
+  background: rgba(255,255,255,.94) !important; color: rgba(0,0,0,.6) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18) !important; transition: background-color 100ms ease;
 }
-.sm-actions:hover { background: rgba(0,0,0,.7); }
-.sm-actions, .sm-actions button, .sm-actions [data-component] { color: rgba(255,255,255,.92) !important; }
-.sm-actions button:hover { background: rgba(255,255,255,.16) !important; }
+.sm-actions button:hover, .sm-actions button[aria-expanded="true"] { background: rgba(236,236,238,.98) !important; color: rgba(0,0,0,.8) !important; }
+.sm-actions [data-component], .sm-actions svg { color: inherit !important; }
+.sm-cell[data-tone="dark"] .sm-actions button {
+  border-color: rgba(255,255,255,.12) !important; background: rgba(44,44,47,.94) !important;
+  color: rgba(255,255,255,.8) !important; box-shadow: 0 1px 3px rgba(0,0,0,.5) !important;
+}
+.sm-cell[data-tone="dark"] .sm-actions button:hover, .sm-cell[data-tone="dark"] .sm-actions button[aria-expanded="true"] {
+  background: rgba(66,66,70,.98) !important; color: rgba(255,255,255,.95) !important;
+}
 /* Stay visible while the host menu is open; the trigger reports it through aria-expanded or data-expanded. */
 .sm-cell:hover .sm-actions, .sm-cell:focus-within .sm-actions,
 .sm-actions:has([aria-expanded="true"], [data-expanded]) { opacity: 1; }
@@ -68,12 +78,12 @@ const css = `
 }
 .sm-caption > span { overflow: hidden; text-overflow: ellipsis; }
 .sm-header {
-  position: absolute; display: flex; align-items: flex-end; gap: 8px; padding: 0 2px 6px; font-size: 12px;
+  position: absolute; display: flex; align-items: flex-end; gap: 6px; padding: 0 2px; line-height: 16px; font-size: 12px;
   color: ${muted}; white-space: nowrap; min-width: 0;
 }
 .sm-header b { font-weight: 600; color: color-mix(in srgb, currentColor 85%, transparent); flex: none; }
-.sm-header .sm-tools { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sm-header .sm-count { margin-left: auto; flex: none; font-size: 11px; line-height: 1.4; padding: 1px 6px; border-radius: 999px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, currentColor 8%, transparent); color: color-mix(in srgb, currentColor 60%, transparent); }
+.sm-header .sm-tools { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sm-header .sm-count { flex: none; font-size: 11px; line-height: 1.3; align-self: center; padding: 1px 6px; border-radius: 999px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, currentColor 8%, transparent); color: color-mix(in srgb, currentColor 60%, transparent); }
 .sm-state { display: grid; place-items: center; align-content: center; justify-items: center; gap: 12px; height: 100%; text-align: center; }
 .sm-state > div { max-width: 240px; font-size: 13px; color: ${muted}; }
 .sm-state .sm-glyph { opacity: .4; }
@@ -148,6 +158,9 @@ function Tile(props: {
   return (
     <div
       class="sm-cell"
+      // The surface of the actions button follows the theme: read the text color on hover.
+      onPointerEnter={(event) => setTone(event.currentTarget)}
+      onFocusIn={(event) => setTone(event.currentTarget)}
       ref={(element) => onCleanup(props.track(element, () => setNear(true)))}
       style={{
         display: props.box ? "block" : "none",
@@ -189,6 +202,16 @@ function Tile(props: {
       </div>
     </div>
   )
+}
+
+/** Mark a cell light or dark from the panel's text color (light text means a dark theme). */
+function setTone(cell: HTMLElement) {
+  const match = getComputedStyle(cell)
+    .color.match(/[\d.]+/g)
+    ?.map(Number)
+  if (!match || match.length < 3) return
+  const [r = 0, g = 0, b = 0] = match
+  cell.dataset.tone = 0.299 * r + 0.587 * g + 0.114 * b > 140 ? "dark" : "light"
 }
 
 export function MediaPanel(props: { session: MountedSession; density: () => Density }) {
@@ -411,7 +434,7 @@ export function MediaPanel(props: { session: MountedSession; density: () => Dens
       <style>{css}</style>
       <div
         ref={scroller}
-        style={{ flex: "1 1 0", "min-height": "0", overflow: "auto", padding: "8px 12px 16px" }}
+        style={{ flex: "1 1 0", "min-height": "0", overflow: "auto", padding: "20px 16px 16px" }}
       >
         <Show
           when={items().length === 0 && ["loading", "error"].includes(statusFor(props.session.key))}

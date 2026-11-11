@@ -1,26 +1,25 @@
 import { usePlugin } from "@opencode/plugin/gui"
-import { DENSITIES, type Density } from "./grid"
+import { DENSITIES, isDensity, type Density } from "./grid"
 
-/** Thumbnail-size menu, drawn with the host's own menu so it matches the tab strip. */
+/**
+ * Thumbnail-size picker. A `Select` and not a `Menu`: a menu item can only carry a
+ * leading icon, so marking the current size moved its label. The select's list marks
+ * the choice natively and its labels never shift.
+ */
 export function DensityMenu(props: { density: () => Density; set: (next: Density) => void }) {
   const ctx = usePlugin()
   const ui = ctx.ui
   return (
-    <ui.Menu
+    <ui.Select
       label={ctx.t("density")}
-      icon="sliders"
-      placement="bottom-end"
-      items={[
-        {
-          type: "group",
-          label: ctx.t("density"),
-          items: (Object.keys(DENSITIES) as Density[]).map((size) => ({
-            label: ctx.t(`density.${size}`),
-            ...(props.density() === size ? { icon: "check" as const } : {}),
-            onSelect: () => props.set(size),
-          })),
-        },
-      ]}
+      value={props.density()}
+      options={(Object.keys(DENSITIES) as Density[]).map((size) => ({
+        value: size,
+        label: ctx.t(`density.${size}`),
+      }))}
+      onChange={(next) => {
+        if (isDensity(next)) props.set(next)
+      }}
     />
   )
 }

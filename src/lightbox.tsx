@@ -23,7 +23,7 @@ const css = `
 .sm-lightbox { animation: sm-fade 140ms ease-out }
 .sm-image { animation: sm-rise 180ms cubic-bezier(.2,.7,.2,1) }
 .sm-button { transition: background-color 120ms ease, transform 120ms ease }
-.sm-button:hover { background: rgba(255,255,255,.24) !important }
+.sm-button:hover { background: rgba(0,0,0,.65) !important }
 .sm-button:active { transform: scale(.94) }
 .sm-bar { cursor: default }
 .sm-tip { position: relative; display: inline-flex; min-width: 0 }
@@ -56,7 +56,7 @@ const button = {
   padding: "0",
   border: "0",
   "border-radius": "999px",
-  background: "rgba(255,255,255,.13)",
+  background: "rgba(0,0,0,.45)",
   color: "white",
 } as const
 
@@ -183,8 +183,8 @@ export function Lightbox(props: {
         // fall through to its own overlay. This content is not inside the host's dialog frame,
         // so it inherits that and every button goes dead. Opt back in.
         "pointer-events": "auto",
-        background: "rgba(10, 10, 12, .86)",
-        "backdrop-filter": "blur(16px) saturate(.8)",
+        background: "rgba(10, 10, 12, .6)",
+        "backdrop-filter": "blur(4px)",
       }}
     >
       <style>{css}</style>
@@ -242,7 +242,7 @@ export function Lightbox(props: {
           gap: "2px",
           padding: "4px",
           "border-radius": "10px",
-          background: "rgba(0, 0, 0, .45)",
+          background: "rgba(0, 0, 0, .55)",
         }}
       >
         <Show when={current()}>
@@ -302,8 +302,8 @@ export function Lightbox(props: {
           transform: "translateX(-50%)",
           padding: "5px 12px",
           "border-radius": "999px",
-          background: "rgba(255,255,255,.13)",
-          color: "rgba(255,255,255,.85)",
+          background: "rgba(0,0,0,.55)",
+          color: "rgba(255,255,255,.92)",
           "font-size": "12px",
           "font-variant-numeric": "tabular-nums",
           "max-width": "80vw",
