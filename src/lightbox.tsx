@@ -1,16 +1,8 @@
-import {
-  Show,
-  createEffect,
-  createMemo,
-  createResource,
-  createSignal,
-  on,
-  onCleanup,
-  onMount,
-} from "solid-js"
+import { Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js"
 import { usePlugin } from "@opencode/plugin/gui"
-import type { MediaItem } from "./extract"
+import { displayName, type MediaItem } from "./extract"
 import { fitWithin } from "./fit"
+import { createLoad } from "./load"
 import { sourceOf, type ReadFile } from "./source"
 
 /** Room kept around the image, as a share of the window. */
@@ -23,10 +15,28 @@ const css = `
 .sm-lightbox { animation: sm-fade 140ms ease-out }
 .sm-image { animation: sm-rise 180ms cubic-bezier(.2,.7,.2,1) }
 .sm-button { transition: background-color 120ms ease, transform 120ms ease }
-.sm-button:hover { background: rgba(255,255,255,.24) !important }
+.sm-button:hover { background: rgba(0,0,0,.65) !important }
 .sm-button:active { transform: scale(.94) }
+.sm-bar { cursor: default }
+.sm-tip { position: relative; display: inline-flex; min-width: 0 }
+.sm-tip::after {
+  content: attr(data-tip); position: absolute; left: 50%; top: calc(100% + 8px); transform: translateX(-50%);
+  padding: 4px 8px; border-radius: 6px; background: rgba(0,0,0,.85); color: rgba(255,255,255,.92);
+  font-size: 11px; line-height: 1.3; white-space: nowrap; max-width: 70vw; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none; opacity: 0; transition: opacity 100ms ease; z-index: 1;
+}
+.sm-bar .sm-tip::after { left: auto; right: 0; transform: none }
+.sm-tip.sm-up::after { top: auto; bottom: calc(100% + 8px) }
+.sm-tip:hover::after, .sm-tip:focus-within:has(:focus-visible)::after { opacity: 1; transition-delay: 400ms }
+.sm-tip:not(:hover):not(:focus-within)::after { transition-delay: 0s }
+.sm-bar button, .sm-bar [data-component] { color: rgba(255,255,255,.88) !important; }
+.sm-bar button:hover { background: rgba(255,255,255,.16) !important; }
+.sm-bar button:focus-visible, .sm-button:focus-visible { outline: 2px solid rgba(255,255,255,.7); outline-offset: 2px; }
+/* The host's icon can swallow pointer events; keep hover on the button itself. */
+.sm-button, .sm-button * { cursor: default }
+.sm-button > * { pointer-events: none }
 @media (prefers-reduced-motion: reduce) {
-  .sm-lightbox, .sm-image, .sm-button { animation: none; transition: none }
+  .sm-lightbox, .sm-image, .sm-button, .sm-tip::after { animation: none; transition: none }
 }
 `
 
@@ -38,9 +48,8 @@ const button = {
   padding: "0",
   border: "0",
   "border-radius": "999px",
-  background: "rgba(255,255,255,.13)",
+  background: "rgba(0,0,0,.45)",
   color: "white",
-  cursor: "pointer",
 } as const
 
 /**
@@ -54,11 +63,14 @@ export function Lightbox(props: {
   items: () => readonly MediaItem[]
   start: string
   read: ReadFile
-  close: () => void
+  /** Called with the ID of the image on screen, so focus can return to its tile. */
+  onClose: (id: string) => void
   openExternal: (item: MediaItem) => void
 }) {
   const ctx = usePlugin()
   const ui = ctx.ui
+  let root: HTMLDivElement | undefined
+  let closeHost: HTMLElement | undefined
   const [id, setId] = createSignal(props.start)
   const [natural, setNatural] = createSignal<{ width: number; height: number }>()
   const [view, setView] = createSignal({ width: window.innerWidth, height: window.innerHeight })
@@ -74,7 +86,8 @@ export function Lightbox(props: {
 
   // A blob URL can be revoked before its `<img>` loads; one retry per image re-reads it.
   const [retried, setRetried] = createSignal<string>()
-  const [src] = createResource(
+  // Not a resource: one would suspend OpenCode's session screen behind the viewer (see `createLoad`).
+  const { value: src, failed } = createLoad(
     () => {
       const item = current()
       return item ? ([item, retried() === item.id] as const) : undefined
@@ -107,13 +120,28 @@ export function Lightbox(props: {
   })
 
   onMount(() => {
+    closeHost?.querySelector("button")?.focus()
     const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Tab" && root) {
+        const stops = [...root.querySelectorAll<HTMLElement>("button:not([disabled])")]
+        if (stops.length === 0) return
+        const first = stops[0]!
+        const last = stops[stops.length - 1]!
+        const active = document.activeElement
+        event.preventDefault()
+        event.stopPropagation()
+        if (!root.contains(active)) first.focus()
+        else if (event.shiftKey)
+          (active === first ? last : stops[stops.indexOf(active as HTMLElement) - 1]!).focus()
+        else (active === last ? first : stops[stops.indexOf(active as HTMLElement) + 1]!).focus()
+        return
+      }
       const by = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0
       if (event.key !== "Escape" && by === 0) return
       // Capture phase: the app's own shortcuts must not also see these keys.
       event.preventDefault()
       event.stopPropagation()
-      if (by === 0) props.close()
+      if (by === 0) props.onClose(id())
       else step(by)
     }
     const onResize = () => setView({ width: window.innerWidth, height: window.innerHeight })
@@ -133,9 +161,10 @@ export function Lightbox(props: {
       class="sm-lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label={ctx.t("panel.title")}
+      aria-label={displayName(current()?.name ?? current()?.path) ?? ctx.t("panel.title")}
+      ref={(element) => (root = element)}
       onClick={(event) => {
-        if (event.target === event.currentTarget) props.close()
+        if (event.target === event.currentTarget) props.onClose(id())
       }}
       style={{
         position: "fixed",
@@ -147,15 +176,19 @@ export function Lightbox(props: {
         // fall through to its own overlay. This content is not inside the host's dialog frame,
         // so it inherits that and every button goes dead. Opt back in.
         "pointer-events": "auto",
-        background: "rgba(8, 8, 10, .62)",
-        "backdrop-filter": "blur(3px)",
+        background: "rgba(10, 10, 12, .6)",
+        "backdrop-filter": "blur(4px)",
       }}
     >
       <style>{css}</style>
 
       <Show
-        when={!src.error}
-        fallback={<div style={{ color: "rgba(255,255,255,.7)" }}>{ctx.t("missing")}</div>}
+        when={!failed()}
+        fallback={
+          <div style={{ color: "rgba(255,255,255,.7)" }}>
+            <ui.Icon name="outline-photo" size="large" />
+          </div>
+        }
       >
         <Show when={src()} fallback={<ui.Loader size="large" />}>
           {(url) => (
@@ -192,37 +225,50 @@ export function Lightbox(props: {
         </Show>
       </Show>
 
-      <button
-        type="button"
-        class="sm-button"
-        aria-label={ctx.t("close")}
-        title={ctx.t("close")}
-        onClick={props.close}
-        style={control({ top: "18px", right: "18px" })}
+      <div
+        class="sm-bar"
+        style={{
+          position: "absolute",
+          top: "16px",
+          right: "16px",
+          display: "flex",
+          gap: "2px",
+          padding: "4px",
+          "border-radius": "10px",
+          background: "rgba(0, 0, 0, .55)",
+        }}
       >
-        <ui.Icon name="close" />
-      </button>
-      <Show when={current()}>
-        {(item) => (
-          <button
-            type="button"
-            class="sm-button"
-            aria-label={ctx.t("open.external")}
-            title={ctx.t("open.external")}
-            onClick={() => props.openExternal(item())}
-            style={control({ top: "18px", right: "66px" })}
-          >
-            <ui.Icon name="arrow-up-right" />
-          </button>
-        )}
-      </Show>
+        <Show when={current()}>
+          {(item) => (
+            <span class="sm-tip" data-tip={ctx.t("open.external")}>
+              <ui.IconButton
+                icon="arrow-up-right"
+                label={ctx.t("open.external")}
+                size="large"
+                variant="ghost"
+                onClick={() => props.openExternal(item())}
+              />
+            </span>
+          )}
+        </Show>
+        <span ref={(element) => (closeHost = element)} style={{ display: "contents" }}>
+          <span class="sm-tip" data-tip={ctx.t("close")}>
+            <ui.IconButton
+              icon="close"
+              label={ctx.t("close")}
+              size="large"
+              variant="ghost"
+              onClick={() => props.onClose(id())}
+            />
+          </span>
+        </span>
+      </div>
 
       <Show when={index() > 0}>
         <button
           type="button"
           class="sm-button"
           aria-label={ctx.t("previous")}
-          title={ctx.t("previous")}
           onClick={() => step(-1)}
           style={control({ left: "18px", top: "50%", transform: "translateY(-50%)" })}
         >
@@ -234,7 +280,6 @@ export function Lightbox(props: {
           type="button"
           class="sm-button"
           aria-label={ctx.t("next")}
-          title={ctx.t("next")}
           onClick={() => step(1)}
           style={control({ right: "18px", top: "50%", transform: "translateY(-50%)" })}
         >
@@ -242,24 +287,46 @@ export function Lightbox(props: {
         </button>
       </Show>
 
-      <Show when={count() > 1}>
-        <div
-          style={{
-            position: "absolute",
-            bottom: "18px",
-            left: "50%",
-            transform: "translateX(-50%)",
-            padding: "4px 12px",
-            "border-radius": "999px",
-            background: "rgba(255,255,255,.13)",
-            color: "rgba(255,255,255,.85)",
-            "font-size": "12px",
-            "font-variant-numeric": "tabular-nums",
-          }}
-        >
-          {index() + 1} / {count()}
-        </div>
-      </Show>
+      <div
+        style={{
+          position: "absolute",
+          bottom: "18px",
+          left: "50%",
+          transform: "translateX(-50%)",
+          padding: "5px 12px",
+          "border-radius": "999px",
+          background: "rgba(0,0,0,.55)",
+          color: "rgba(255,255,255,.92)",
+          "font-size": "12px",
+          "font-variant-numeric": "tabular-nums",
+          "max-width": "80vw",
+          display: "flex",
+          "white-space": "pre",
+        }}
+      >
+        <span aria-live="polite">
+          <Show when={count() > 1}>
+            {index() + 1} / {count()}
+            <Show when={displayName(current()?.name ?? current()?.path)}> · </Show>
+          </Show>
+        </span>
+        <Show when={displayName(current()?.name ?? current()?.path)}>
+          {(name) => (
+            <span class="sm-tip sm-up" data-tip={current()?.path ?? current()?.name ?? name()}>
+              <span
+                style={{
+                  ...(count() > 1 ? { opacity: "0.7" } : {}),
+                  overflow: "hidden",
+                  "text-overflow": "ellipsis",
+                  "max-width": "50vw",
+                }}
+              >
+                {name()}
+              </span>
+            </span>
+          )}
+        </Show>
+      </div>
     </div>
   )
 }

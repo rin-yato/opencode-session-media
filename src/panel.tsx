@@ -1,60 +1,101 @@
 import {
   For,
   Show,
-  batch,
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   onCleanup,
   onMount,
+  untrack,
   type JSX,
 } from "solid-js"
-import { createStore } from "solid-js/store"
-import { usePlugin, type MountedSession } from "@opencode/plugin/gui"
+import { usePlugin, type MountedSession, type UiMenuEntry } from "@opencode/plugin/gui"
 import { MediaIpc } from "./contract"
 import { displayName, type MediaItem } from "./extract"
-import { justify, targetHeight, type Box } from "./justify"
+import { DENSITIES, groupItems, layoutGrid, relativeTime, type Box, type Density } from "./grid"
 import { Lightbox } from "./lightbox"
-import { inlineSize } from "./size"
+import { createLoad } from "./load"
+import { extensionOf, toolLabel } from "./labels"
 import { thumbOf, type ReadFile } from "./source"
 import {
   errorFor,
+  hasMoreFor,
   loadAll,
+  loadingMoreFor,
   loadNew,
+  loadOlder,
   mediaFor,
   refreshMessage,
   statusFor,
   type Loader,
 } from "./store"
 
-const muted = "color-mix(in srgb, currentColor 60%, transparent)"
+const muted = "color-mix(in srgb, currentColor 65%, transparent)"
 const GAP = 8
-
-/** Shape used for an image whose size could not be read (a phone-shaped slot). */
-const FALLBACK_RATIO = 0.75
+const CAPTION = 24
+const HEADER = 16
+const GROUP_GAP = 24
 
 /** How far outside the viewport a tile starts loading, so scrolling never shows an empty tile. */
 const LOAD_MARGIN = "700px 0px"
 
 const css = `
+.sm-cell { position: absolute; }
+.sm-actions { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 120ms ease; display: flex; }
+/* One control: the trigger button is the surface; its own hover and background are overridden. */
+.sm-actions button {
+  width: 26px !important; height: 26px !important; min-width: 0 !important; padding: 0 !important;
+  border-radius: 6px !important; border: 1px solid rgba(0,0,0,.1) !important;
+  background: rgba(255,255,255,.94) !important; color: rgba(0,0,0,.6) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,.18) !important; transition: background-color 100ms ease;
+}
+.sm-actions button:hover, .sm-actions button[aria-expanded="true"] { background: rgba(236,236,238,.98) !important; color: rgba(0,0,0,.8) !important; }
+.sm-actions [data-component], .sm-actions svg { color: inherit !important; }
+.sm-cell[data-tone="dark"] .sm-actions button {
+  border-color: rgba(255,255,255,.12) !important; background: rgba(44,44,47,.94) !important;
+  color: rgba(255,255,255,.8) !important; box-shadow: 0 1px 3px rgba(0,0,0,.5) !important;
+}
+.sm-cell[data-tone="dark"] .sm-actions button:hover, .sm-cell[data-tone="dark"] .sm-actions button[aria-expanded="true"] {
+  background: rgba(66,66,70,.98) !important; color: rgba(255,255,255,.95) !important;
+}
+/* Stay visible while the host menu is open; the trigger reports it through aria-expanded or data-expanded. */
+.sm-cell:hover .sm-actions, .sm-cell:focus-within .sm-actions,
+.sm-actions:has([aria-expanded="true"], [data-expanded]) { opacity: 1; }
+@media (hover: none) { .sm-actions { opacity: 1; } }
 .sm-tile {
-  position: absolute; padding: 0; border: 0; overflow: hidden; cursor: pointer;
-  border-radius: 8px; color: inherit;
-  background: color-mix(in srgb, currentColor 7%, transparent);
+  position: absolute; inset: 0; padding: 0; border: 0; color: inherit;
+  display: flex; flex-direction: column; text-align: left; background: none;
   transition: transform 140ms ease;
 }
-.sm-tile::after {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 14%, transparent);
-  transition: box-shadow 140ms ease;
-}
-.sm-tile:hover::after { box-shadow: inset 0 0 0 2px color-mix(in srgb, currentColor 42%, transparent); }
 .sm-tile:active { transform: scale(.985); }
-.sm-tile:focus-visible { outline: 2px solid color-mix(in srgb, currentColor 60%, transparent); outline-offset: 2px; }
-.sm-img { display: block; width: 100%; height: 100%; object-fit: cover; transition: opacity 180ms ease; }
-.sm-note { display: grid; place-items: center; height: 100%; padding: 8px; text-align: center; font-size: 11px; }
-@media (prefers-reduced-motion: reduce) { .sm-tile, .sm-tile::after, .sm-img { transition: none; } }
+.sm-tile:focus-visible { outline: 2px solid color-mix(in srgb, currentColor 60%, transparent); outline-offset: 2px; border-radius: 8px; }
+.sm-frame {
+  position: relative; flex: 1 1 0; min-height: 0; overflow: hidden; border-radius: 8px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  transition: background-color 140ms ease;
+}
+.sm-tile:hover .sm-frame { background: color-mix(in srgb, currentColor 12%, transparent); }
+.sm-img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; transition: opacity 180ms ease; }
+.sm-caption {
+  display: flex; align-items: center; gap: 4px; flex: none; height: ${CAPTION}px; padding: 0 2px;
+  font-size: 12px; color: ${muted}; white-space: nowrap; min-width: 0;
+}
+.sm-caption > span { overflow: hidden; text-overflow: ellipsis; }
+.sm-header {
+  position: absolute; display: flex; align-items: flex-end; gap: 6px; padding: 0 2px; line-height: 16px; font-size: 12px;
+  color: ${muted}; white-space: nowrap; min-width: 0;
+}
+.sm-header b { font-weight: 600; color: color-mix(in srgb, currentColor 85%, transparent); flex: none; }
+.sm-header .sm-tools { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sm-header .sm-count { flex: none; font-size: 11px; line-height: 1.3; align-self: center; padding: 1px 6px; border-radius: 999px; font-variant-numeric: tabular-nums; background: color-mix(in srgb, currentColor 8%, transparent); color: color-mix(in srgb, currentColor 60%, transparent); }
+.sm-state { display: grid; place-items: center; align-content: center; justify-items: center; gap: 12px; height: 100%; text-align: center; }
+.sm-state > div { max-width: 240px; font-size: 13px; color: ${muted}; }
+.sm-state .sm-glyph { opacity: .4; }
+.sm-state > div.sm-title { font-size: 13px; font-weight: 600; color: color-mix(in srgb, currentColor 85%, transparent); margin-bottom: -6px; }
+.sm-note { display: grid; place-items: center; align-content: center; gap: 8px; height: 100%; padding: 8px; text-align: center; color: color-mix(in srgb, currentColor 55%, transparent); }
+.sm-badge { font-size: 10px; font-weight: 600; letter-spacing: .04em; padding: 2px 6px; border-radius: 4px; background: color-mix(in srgb, currentColor 10%, transparent); }
+.sm-gone { position: absolute; inset: 0; display: grid; place-items: center; color: color-mix(in srgb, currentColor 35%, transparent); }
+@media (prefers-reduced-motion: reduce) { .sm-tile, .sm-frame, .sm-img, .sm-actions { transition: none; } }
 `
 
 /**
@@ -67,28 +108,65 @@ function Tile(props: {
   box: Box | undefined
   read: ReadFile
   track: (element: Element, onNear: () => void) => () => void
-  missing: string
+  /** Quiet stand-in when the file can no longer be read. */
+  gone: JSX.Element
   icon: JSX.Element
+  /** The tiny icon before the caption. */
+  mark?: JSX.Element
   onOpen: () => void
+  openExternal: () => void
 }) {
   const ctx = usePlugin()
   const [near, setNear] = createSignal(false)
   const [loaded, setLoaded] = createSignal(false)
   // A blob URL can be revoked before its `<img>` fires `load`; one retry re-reads it.
   const [retried, setRetried] = createSignal(false)
-  const [src] = createResource(
+  // Not a resource: one would suspend OpenCode's session screen (see `createLoad`).
+  const { value: src, failed } = createLoad(
     () => (near() && props.item.kind === "image" ? ([props.item, retried()] as const) : undefined),
     // A small copy: tiles are a few hundred px wide. The viewer opens the full image.
     ([item]) =>
       thumbOf(item, props.read, (path, maxSize) => ctx.main(MediaIpc).thumb({ path, maxSize })),
   )
 
+  const actions = (): UiMenuEntry[] => {
+    const item = props.item
+    const path = item.path
+    const entries: UiMenuEntry[] = [
+      { label: ctx.t("open.external"), icon: "arrow-up-right", onSelect: props.openExternal },
+    ]
+    if (path) {
+      entries.push({
+        label: ctx.t("copy.path"),
+        icon: "copy",
+        onSelect: () => {
+          ctx.system.copy(path).then(
+            () => ctx.toast.show({ title: ctx.t("copy.done"), variant: "success" }),
+            () => ctx.toast.show({ title: ctx.t("copy.failed"), variant: "error" }),
+          )
+        },
+      })
+      const desktop = ctx.desktop
+      if (desktop)
+        entries.push({
+          label: ctx.t(`reveal.${desktop.os}`),
+          icon: "folder",
+          onSelect: () => {
+            const failed = () => ctx.toast.show({ title: ctx.t("reveal.failed"), variant: "error" })
+            desktop.reveal(path).then((ok) => ok || failed(), failed)
+          },
+        })
+    }
+    return entries
+  }
+
   return (
-    <button
-      type="button"
-      class="sm-tile"
+    <div
+      class="sm-cell"
+      // The surface of the actions button follows the theme: read the text color on hover.
+      onPointerEnter={(event) => setTone(event.currentTarget)}
+      onFocusIn={(event) => setTone(event.currentTarget)}
       ref={(element) => onCleanup(props.track(element, () => setNear(true)))}
-      onClick={props.onOpen}
       style={{
         display: props.box ? "block" : "none",
         left: `${props.box?.left ?? 0}px`,
@@ -97,37 +175,64 @@ function Tile(props: {
         height: `${props.box?.height ?? 0}px`,
       }}
     >
-      <Show when={props.item.kind === "image"} fallback={props.icon}>
-        <Show when={!src.error} fallback={<span class="sm-note">{props.missing}</span>}>
-          <Show when={src()}>
-            {(url) => (
-              <img
-                class="sm-img"
-                src={url()}
-                alt=""
-                draggable={false}
-                onLoad={() => setLoaded(true)}
-                onError={() => {
-                  if (!loaded() && !retried()) setRetried(true)
-                }}
-                style={{ opacity: loaded() ? "1" : "0" }}
-              />
-            )}
+      <button type="button" class="sm-tile" data-id={props.item.id} onClick={props.onOpen}>
+        <div class="sm-frame">
+          <Show when={props.item.kind === "image"} fallback={props.icon}>
+            <Show when={!failed()} fallback={<div class="sm-gone">{props.gone}</div>}>
+              <Show when={src()}>
+                {(url) => (
+                  <img
+                    class="sm-img"
+                    src={url()}
+                    alt=""
+                    draggable={false}
+                    onLoad={() => setLoaded(true)}
+                    onError={() => {
+                      if (!loaded() && !retried()) setRetried(true)
+                    }}
+                    style={{ opacity: loaded() ? "1" : "0" }}
+                  />
+                )}
+              </Show>
+            </Show>
           </Show>
-        </Show>
-      </Show>
-    </button>
+        </div>
+        <div class="sm-caption">
+          {props.mark}
+          <span>{displayName(props.item.name ?? props.item.path) ?? props.item.mime}</span>
+        </div>
+      </button>
+      <div class="sm-actions">
+        <ctx.ui.Menu label={ctx.t("actions")} items={actions()} />
+      </div>
+    </div>
   )
 }
 
-export function MediaPanel(props: { session: MountedSession }) {
+/** Mark a cell light or dark from the panel's text color (light text means a dark theme). */
+function setTone(cell: HTMLElement) {
+  const match = getComputedStyle(cell)
+    .color.match(/[\d.]+/g)
+    ?.map(Number)
+  if (!match || match.length < 3) return
+  const [r = 0, g = 0, b = 0] = match
+  cell.dataset.tone = 0.299 * r + 0.587 * g + 0.114 * b > 140 ? "dark" : "light"
+}
+
+export function MediaPanel(props: { session: MountedSession; density: () => Density }) {
   const ctx = usePlugin()
   const ui = ctx.ui
   const [width, setWidth] = createSignal(0)
-  /** Width / height per item, known before any image loads. */
-  const [ratios, setRatios] = createStore<Record<string, number>>({})
+  /** Path-only items whose file exists; the rest stay out of the grid. */
+  const [confirmed, setConfirmed] = createSignal<ReadonlySet<string>>(new Set())
+  const density = () => props.density()
+  // Keeps relative times fresh.
+  const [now, setNow] = createSignal(Date.now())
+  const tick = setInterval(() => setNow(Date.now()), 30_000)
+  onCleanup(() => clearInterval(tick))
   let scroller: HTMLDivElement | undefined
   let inner: HTMLDivElement | undefined
+  let sentinel: HTMLDivElement | undefined
 
   // Read the Ipc where it is used: it follows main across restarts.
   const read: ReadFile = (path) => ctx.main(MediaIpc).read(path)
@@ -137,23 +242,59 @@ export function MediaPanel(props: { session: MountedSession }) {
     get: (input) => session.server.client.session.message.get(input),
   })
 
+  const retry = () => {
+    const session = props.session
+    if (!session.pending) void loadAll(session.key, session.id, loader(session))
+  }
+
+  /**
+   * A loader that always reads the latest session object: the host hands over a new
+   * object on a route change, and a load must not run against a stale one.
+   */
+  const source: Loader = {
+    list: (input) => loader(untrack(() => props.session)).list(input),
+    get: (input) => loader(untrack(() => props.session)).get(input),
+  }
+
+  // What a load depends on. A new session object with the same key, ID, server and
+  // pending state is not a new session, so it does not re-run the effect below.
+  const identity = createMemo(
+    () => ({
+      key: props.session.key,
+      id: props.session.id,
+      pending: !!props.session.pending,
+      server: props.session.server,
+    }),
+    undefined,
+    {
+      equals: (a, b) =>
+        a.key === b.key && a.id === b.id && a.pending === b.pending && a.server === b.server,
+    },
+  )
+
   // The panel stays mounted when the user switches sessions, so follow the key.
   createEffect(() => {
-    const session = props.session
-    const key = session.key
-    const sessionID = session.id
-    const source = loader(session)
-    if (session.pending) return
-    void loadAll(key, sessionID, source)
+    const { key, id: sessionID, pending, server } = identity()
+    if (pending) return
+
+    // Let the panel paint before the first read; a long history is parsed after it.
+    const start = () => void loadAll(key, sessionID, source)
+    if (typeof requestIdleCallback === "function") {
+      const handle = requestIdleCallback(start, { timeout: 400 })
+      onCleanup(() => cancelIdleCallback(handle))
+    } else {
+      const handle = setTimeout(start, 50)
+      onCleanup(() => clearTimeout(handle))
+    }
 
     // Tools that print a file path (screenshots inside `execute`) carry no file
     // part, so refresh on every completed tool, not only the ones with files.
-    const stopTool = session.server.data.on("session.tool.success", (event) => {
+    const stopTool = server.data.on("session.tool.success", (event) => {
       if (event.data.sessionID !== sessionID) return
       void refreshMessage(key, sessionID, event.data.assistantMessageID, source)
     })
     // A prompt with attachments is not a tool result; pick those up when a run ends.
-    const stopRun = session.server.data.on("session.execution.succeeded", (event) => {
+    const stopRun = server.data.on("session.execution.succeeded", (event) => {
       if (event.data.sessionID === sessionID) void loadNew(key, sessionID, source)
     })
     onCleanup(() => {
@@ -162,68 +303,85 @@ export function MediaPanel(props: { session: MountedSession }) {
     })
   })
 
-  // Newest first: what the agent just looked at is what you want to find.
-  const items = createMemo(() => mediaFor(props.session.key).toReversed())
-
-  // Learn every item's shape up front: from the bytes the app already holds, or
-  // from the file header through the main process. An item joins the layout once
-  // its shape is known, so nothing ever has to move afterwards.
-  const requested = new Set<string>()
+  // Older history loads while the end of the grid is in view (and again as long as it stays so).
+  const [atEnd, setAtEnd] = createSignal(false)
   createEffect(() => {
-    const pending: MediaItem[] = []
-    batch(() => {
-      for (const item of items()) {
-        if (requested.has(item.id)) continue
-        requested.add(item.id)
-        if (item.kind !== "image") {
-          setRatios(item.id, 1)
-          continue
-        }
-        const size = item.src ? inlineSize(item.src) : undefined
-        if (size) setRatios(item.id, size.width / size.height)
-        else if (item.path) pending.push(item)
-        else setRatios(item.id, FALLBACK_RATIO)
-      }
-    })
+    const { key, id, pending } = identity()
+    if (pending || !atEnd() || !hasMoreFor(key) || loadingMoreFor(key)) return
+    void loadOlder(key, id, source)
+  })
+
+  // Items with bytes join the grid at once. A path-only item (a path some text merely
+  // mentioned) waits until main says its file exists; unknown counts as not existing.
+  const items = createMemo(() =>
+    mediaFor(props.session.key).filter(
+      (item) => item.src !== undefined || confirmed().has(item.id),
+    ),
+  )
+  const checked = new Set<string>()
+  createEffect(() => {
+    const pending = mediaFor(props.session.key).filter(
+      (item) => item.src === undefined && item.path && !checked.has(item.id),
+    )
     if (pending.length === 0) return
-    const settle = (
-      sizes: readonly { width: number; height: number; exists: boolean }[] | undefined,
-    ) =>
-      batch(() => {
-        pending.forEach((item, index) => {
-          const size = sizes?.[index]
-          // A guessed path with no file behind it is not media: it never joins the layout.
-          if (item.tentative && size && !size.exists) return
-          setRatios(
-            item.id,
-            size && size.width > 0 && size.height > 0 ? size.width / size.height : FALLBACK_RATIO,
-          )
-        })
-      })
+    for (const item of pending) checked.add(item.id)
+    const settle = (sizes: readonly { exists: boolean }[] | undefined) => {
+      // Only an explicit `true` counts; a missing answer stays hidden.
+      const ok = pending.filter((_, index) => sizes?.[index]?.exists === true)
+      if (ok.length > 0) setConfirmed((set) => new Set([...set, ...ok.map((item) => item.id)]))
+    }
     ctx
       .main(MediaIpc)
       .measure(pending.map((item) => item.path ?? ""))
       .then(settle, () => settle(undefined))
   })
 
-  const known = createMemo(() => items().filter((item) => ratios[item.id] !== undefined))
+  /** Groups by turn, newest first; the order the grid and the viewer both use. */
+  const groups = createMemo(() => groupItems(items()))
+  // Headers are keyed by group key, not by group object: `groupItems` returns new objects on
+  // every update, and a keyed-by-object list would unmount and remount every header per page.
+  const groupKeys = createMemo(() => groups().map((group) => group.key))
+  const groupByKey = createMemo(() => new Map(groups().map((group) => [group.key, group])))
+  const flat = createMemo(() => groups().flatMap((group) => group.items))
+  const byId = createMemo(() => new Map(flat().map((item) => [item.id, item])))
+  const ids = createMemo(() => flat().map((item) => item.id))
 
-  // The layout reads `width` and `ratios`; the tiles below are keyed by item, so a
-  // resize only rewrites their positions. Nothing remounts, nothing re-decodes.
+  // The layout reads `width`, density and the groups; the tiles below are keyed by
+  // id, so a resize or density change only rewrites positions. Nothing remounts.
   const arranged = createMemo(() => {
-    const available = width()
-    const list = known()
-    const { boxes, height } = justify(
-      list.map((item) => ratios[item.id] ?? FALLBACK_RATIO),
-      { width: available, gap: GAP, target: targetHeight(available) },
+    const layout = layoutGrid(
+      groups().map((group) => group.items.length),
+      {
+        width: width(),
+        gap: GAP,
+        minCell: DENSITIES[density()],
+        caption: CAPTION,
+        header: HEADER,
+        groupGap: GROUP_GAP,
+      },
     )
-    const byId = new Map<string, Box>()
-    list.forEach((item, index) => {
-      const box = boxes[index]
-      if (box) byId.set(item.id, box)
+    const boxes = new Map<string, Box>()
+    const headers = new Map<string, Box>()
+    groups().forEach((group, index) => {
+      const placed = layout.groups[index]
+      if (!placed || placed.cells.length === 0) return
+      headers.set(group.key, placed.header)
+      group.items.forEach((item, at) => {
+        const box = placed.cells[at]
+        if (box) boxes.set(item.id, box)
+      })
     })
-    return { byId, height }
+    return { boxes, headers, height: layout.height }
   })
+
+  const headline = (group: ReturnType<typeof groups>[number]) => {
+    const parts = group.tools.map((tool) => {
+      const label = toolLabel(tool)
+      return "key" in label ? ctx.t(`tool.${label.key}`) : label.text
+    })
+    if (group.attached) parts.push(ctx.t("group.attached"))
+    return [relativeTime(group.time, now(), ctx.locale.locale()), parts.join(", ")] as const
+  }
 
   // One observer for every tile: a tile loads its picture the first time it comes near the viewport.
   const watched = new Map<Element, () => void>()
@@ -260,6 +418,14 @@ export function MediaPanel(props: { session: MountedSession }) {
     )
     for (const element of watched.keys()) observer.observe(element)
     onCleanup(() => observer?.disconnect())
+    if (sentinel) {
+      const end = new IntersectionObserver(([entry]) => setAtEnd(entry?.isIntersecting ?? false), {
+        root: scroller ?? null,
+        rootMargin: "0px 0px 400px 0px",
+      })
+      end.observe(sentinel)
+      onCleanup(() => end.disconnect())
+    }
   })
 
   /** Hand an inline item to the main process as a temp file the system viewer can open. */
@@ -303,56 +469,126 @@ export function MediaPanel(props: { session: MountedSession }) {
     ctx.dialogs.open((dialog) => (
       <Lightbox
         // The images in display order, live: stepping follows what the grid shows.
-        items={() => known().filter((entry) => entry.kind === "image")}
+        items={() => flat().filter((entry) => entry.kind === "image")}
         start={item.id}
         read={read}
-        close={dialog.close}
+        onClose={(id) => {
+          dialog.close()
+          // After the host has put focus back, land on the tile of the image last shown.
+          setTimeout(() => {
+            const tile = scroller?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`)
+            tile?.focus({ preventScroll: true })
+            tile?.scrollIntoView({ block: "nearest" })
+          }, 0)
+        }}
         openExternal={(entry) => void openExternal(entry)}
       />
     ))
   }
 
   return (
-    <div ref={scroller} style={{ height: "100%", overflow: "auto", padding: `${GAP}px` }}>
+    <div style={{ height: "100%", display: "flex", "flex-direction": "column" }}>
       <style>{css}</style>
-
-      <Show when={statusFor(props.session.key) === "loading" && items().length === 0}>
-        <ui.Loader size="large" />
-      </Show>
-      <Show when={statusFor(props.session.key) === "error"}>
-        <div style={{ color: muted }}>{errorFor(props.session.key)}</div>
-      </Show>
-      <Show when={statusFor(props.session.key) === "ready" && items().length === 0}>
-        <div style={{ color: muted, padding: "8px" }}>{ctx.t("empty")}</div>
-      </Show>
-
       <div
-        ref={inner}
-        style={{ position: "relative", width: "100%", height: `${arranged().height}px` }}
+        ref={scroller}
+        style={{ flex: "1 1 0", "min-height": "0", overflow: "auto", padding: "20px 16px 16px" }}
       >
-        <For each={known()}>
-          {(item) => (
-            <Tile
-              item={item}
-              box={arranged().byId.get(item.id)}
-              read={read}
-              track={track}
-              missing={ctx.t("missing")}
-              icon={
-                <div
-                  class="sm-note"
-                  style={{ "flex-direction": "column", "word-break": "break-all" }}
-                >
-                  <div>
-                    <ui.Icon name="folder" size="large" />
-                    <div>{displayName(item.name) ?? item.mime}</div>
-                  </div>
-                </div>
-              }
-              onOpen={() => open(item)}
-            />
-          )}
-        </For>
+        <Show
+          when={items().length === 0 && ["loading", "error"].includes(statusFor(props.session.key))}
+        >
+          <div class="sm-state">
+            <Show
+              when={statusFor(props.session.key) === "error"}
+              fallback={<ui.Loader size="large" />}
+            >
+              <ui.Icon class="sm-glyph" name="photo" size="large" />
+              <div>{errorFor(props.session.key) ?? ctx.t("load.failed")}</div>
+              <ui.Button variant="ghost" size="small" onClick={retry}>
+                {ctx.t("retry")}
+              </ui.Button>
+            </Show>
+          </div>
+        </Show>
+        <Show when={statusFor(props.session.key) === "ready" && items().length === 0}>
+          <div class="sm-state">
+            <ui.Icon class="sm-glyph" name="photo" size="large" />
+            <div class="sm-title">{ctx.t("empty.title")}</div>
+            <div>{ctx.t("empty")}</div>
+          </div>
+        </Show>
+
+        <div
+          ref={inner}
+          style={{ position: "relative", width: "100%", height: `${arranged().height}px` }}
+        >
+          <For each={groupKeys()}>
+            {(groupKey) => {
+              const group = () => groupByKey().get(groupKey)!
+              return (
+                <Show when={arranged().headers.get(groupKey)}>
+                  {(box) => (
+                    <div
+                      class="sm-header"
+                      style={{
+                        left: `${box().left}px`,
+                        top: `${box().top}px`,
+                        width: `${box().width}px`,
+                        height: `${box().height}px`,
+                      }}
+                    >
+                      <b>{headline(group())[0]}</b>
+                      <span class="sm-tools">{headline(group())[1]}</span>
+                      <span class="sm-count">{group().items.length}</span>
+                    </div>
+                  )}
+                </Show>
+              )
+            }}
+          </For>
+          <For each={ids()}>
+            {(id) => {
+              const item = () => byId().get(id)!
+              return (
+                <Tile
+                  item={item()}
+                  box={arranged().boxes.get(id)}
+                  read={read}
+                  track={track}
+                  gone={<ui.Icon name="outline-photo" size="large" />}
+                  mark={
+                    <Show when={item().origin === "user"}>
+                      <ui.Icon name="prompt" size="small" />
+                    </Show>
+                  }
+                  icon={
+                    <div class="sm-note">
+                      <ui.Icon name="file-document" size="large" />
+                      <span class="sm-badge">
+                        {extensionOf(item().name ?? item().path, item().mime)}
+                      </span>
+                    </div>
+                  }
+                  onOpen={() => open(item())}
+                  openExternal={() => void openExternal(item())}
+                />
+              )
+            }}
+          </For>
+        </div>
+        {/* The end zone keeps one height while older history exists, so the loader appearing never moves the scroll height. */}
+        <div
+          ref={sentinel}
+          style={{
+            height: hasMoreFor(props.session.key) ? "44px" : "1px",
+            display: "grid",
+            "place-items": "center",
+            color: muted,
+          }}
+        >
+          <Show when={loadingMoreFor(props.session.key)}>
+            <ui.Loader size="small" />
+          </Show>
+        </div>
       </div>
     </div>
   )

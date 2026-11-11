@@ -19,6 +19,14 @@ export interface MediaItem {
   readonly messageID: string
   readonly time: number | undefined
   /**
+   * The turn this item belongs to: the ID of the user prompt that started it.
+   * Undefined until the store links it (see `assignTurns`); grouping then falls
+   * back to `messageID`.
+   */
+  readonly turn?: string | undefined
+  /** When that turn's prompt was sent. */
+  readonly turnTime?: number | undefined
+  /**
    * Guessed from free text (an unquoted path with spaces) and possibly not a
    * path at all: the panel shows it only once the file is known to exist.
    */
@@ -212,6 +220,9 @@ export function fromMessage(message: unknown): MediaItem[] {
         tool: undefined,
         messageID,
         time,
+        // A prompt starts its own turn.
+        turn: messageID,
+        turnTime: time,
       })
     })
     return items
@@ -236,6 +247,60 @@ export function fromMessage(message: unknown): MediaItem[] {
   return []
 }
 
+/** A user prompt, which begins a turn. */
+export interface TurnStart {
+  readonly id: string
+  readonly time: number
+}
+
+/** The start of the turn a stored message is, if it is a user prompt with a time. */
+export function turnStartOf(message: unknown): TurnStart | undefined {
+  if (!isRecord(message) || message.type !== "user") return undefined
+  const id = str(message.id)
+  const time =
+    isRecord(message.time) && typeof message.time.created === "number"
+      ? message.time.created
+      : undefined
+  return id && time !== undefined ? { id, time } : undefined
+}
+
+/**
+ * Link items to turns. The API has no parent link between an assistant message
+ * and its prompt, so a turn is: a user prompt plus every later message up to
+ * the next prompt. An item belongs to the latest prompt created at or before it.
+ * Items before any known prompt, or without a time, keep `turn` undefined (the
+ * grid then groups them by message). Returns the same array when nothing changes.
+ */
+export function assignTurns(
+  items: readonly MediaItem[],
+  starts: readonly TurnStart[],
+): MediaItem[] {
+  const sorted = starts.toSorted((a, b) => a.time - b.time)
+  return items.map((item) => {
+    if (item.origin === "user" || item.time === undefined) return item
+    // The latest start at or before the item: binary search over the sorted starts.
+    let low = 0
+    let high = sorted.length
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if (sorted[mid]!.time <= item.time) low = mid + 1
+      else high = mid
+    }
+    const found = low > 0 ? sorted[low - 1] : undefined
+    if (item.turn === found?.id && item.turnTime === found?.time) return item
+    return { ...item, turn: found?.id, turnTime: found?.time }
+  })
+}
+
+/** Shallow equality of two items; a re-read of an unchanged item keeps the old object, so nothing downstream re-renders. */
+function sameFields(a: MediaItem, b: MediaItem): boolean {
+  const left = a as unknown as Record<string, unknown>
+  const right = b as unknown as Record<string, unknown>
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)])
+  for (const key of keys) if (left[key] !== right[key]) return false
+  return true
+}
+
 /**
  * Merge new items into an existing list, keeping first-seen order. Items with
  * the same id, or the same file path, collapse into one; the copy that already
@@ -253,7 +318,7 @@ export function merge(existing: readonly MediaItem[], incoming: readonly MediaIt
     else if (current.src === undefined && current.tentative && !item.tentative)
       // A firm mention of the same path confirms a guessed one.
       byKey.set(key, { ...current, tentative: false })
-    else if (current.id === item.id) byKey.set(key, item)
+    else if (current.id === item.id) byKey.set(key, sameFields(current, item) ? current : item)
   }
   return [...byKey.values()]
 }

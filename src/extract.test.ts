@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
+  assignTurns,
   displayName,
+  turnStartOf,
+  type MediaItem,
   fromMessage,
   fromToolContent,
   imageMentionsIn,
@@ -287,5 +290,37 @@ describe("helpers", () => {
     })
     const merged = merge(a, [...a, ...b])
     expect(merged.map((item) => item.id)).toEqual(["m:t:0", "m:u:0"])
+  })
+})
+
+describe("assignTurns", () => {
+  const at = (id: string, time: number | undefined, origin: "tool" | "user" = "tool") =>
+    ({ id, messageID: id, time, origin }) as unknown as MediaItem
+
+  test("an item belongs to the latest prompt at or before it", () => {
+    const starts = [
+      { id: "u2", time: 20 },
+      { id: "u1", time: 10 },
+    ]
+    const out = assignTurns(
+      [at("a", 12), at("b", 20), at("c", 99), at("d", 5), at("e", undefined)],
+      starts,
+    )
+    expect(out.map((item) => item.turn)).toEqual(["u1", "u2", "u2", undefined, undefined])
+    expect(out[0]?.turnTime).toBe(10)
+  })
+
+  test("user attachments keep their own turn", () => {
+    const [item] = assignTurns([{ ...at("a", 12, "user"), turn: "a" }], [{ id: "u9", time: 1 }])
+    expect(item?.turn).toBe("a")
+  })
+
+  test("turnStartOf reads only timed user prompts", () => {
+    expect(turnStartOf({ id: "u", type: "user", time: { created: 3 } })).toEqual({
+      id: "u",
+      time: 3,
+    })
+    expect(turnStartOf({ id: "a", type: "assistant", time: { created: 3 } })).toBeUndefined()
+    expect(turnStartOf({ id: "u", type: "user" })).toBeUndefined()
   })
 })
