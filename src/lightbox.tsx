@@ -33,6 +33,7 @@ const css = `
   font-size: 11px; line-height: 1.3; white-space: nowrap; max-width: 70vw; overflow: hidden; text-overflow: ellipsis;
   pointer-events: none; opacity: 0; transition: opacity 100ms ease; z-index: 1;
 }
+.sm-bar .sm-tip::after { left: auto; right: 0; transform: none }
 .sm-tip.sm-up::after { top: auto; bottom: calc(100% + 8px) }
 .sm-tip:hover::after, .sm-tip:focus-within:has(:focus-visible)::after { opacity: 1; transition-delay: 400ms }
 .sm-tip:not(:hover):not(:focus-within)::after { transition-delay: 0s }

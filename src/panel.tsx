@@ -37,8 +37,17 @@ const LOAD_MARGIN = "700px 0px"
 
 const css = `
 .sm-cell { position: absolute; }
-.sm-actions { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 120ms ease; }
-.sm-cell:hover .sm-actions, .sm-cell:focus-within .sm-actions { opacity: 1; }
+.sm-actions {
+  position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity 120ms ease;
+  border-radius: 6px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);
+}
+.sm-actions:hover { background: rgba(0,0,0,.7); }
+.sm-actions, .sm-actions button, .sm-actions [data-component] { color: rgba(255,255,255,.92) !important; }
+.sm-actions button:hover { background: rgba(255,255,255,.16) !important; }
+/* Stay visible while the host menu is open; the trigger reports it through aria-expanded or data-expanded. */
+.sm-cell:hover .sm-actions, .sm-cell:focus-within .sm-actions,
+.sm-actions:has([aria-expanded="true"], [data-expanded]) { opacity: 1; }
+@media (hover: none) { .sm-actions { opacity: 1; } }
 .sm-tile {
   position: absolute; inset: 0; padding: 0; border: 0; color: inherit;
   display: flex; flex-direction: column; text-align: left; background: none;
@@ -116,7 +125,7 @@ function Tile(props: {
         label: ctx.t("copy.path"),
         icon: "copy",
         onSelect: () => {
-          navigator.clipboard.writeText(path).then(
+          ctx.system.copy(path).then(
             () => ctx.toast.show({ title: ctx.t("copy.done"), variant: "success" }),
             () => ctx.toast.show({ title: ctx.t("copy.failed"), variant: "error" }),
           )
@@ -125,9 +134,12 @@ function Tile(props: {
       const desktop = ctx.desktop
       if (desktop)
         entries.push({
-          label: ctx.t("reveal"),
+          label: ctx.t(`reveal.${desktop.os}`),
           icon: "folder",
-          onSelect: () => void desktop.reveal(path).catch(() => {}),
+          onSelect: () => {
+            const failed = () => ctx.toast.show({ title: ctx.t("reveal.failed"), variant: "error" })
+            desktop.reveal(path).then((ok) => ok || failed(), failed)
+          },
         })
     }
     return entries
@@ -169,12 +181,7 @@ function Tile(props: {
         </div>
         <div class="sm-caption">
           {props.mark}
-          <ctx.ui.Tooltip
-            value={props.item.path ?? props.item.name ?? props.item.mime}
-            placement="bottom"
-          >
-            <span>{displayName(props.item.name ?? props.item.path) ?? props.item.mime}</span>
-          </ctx.ui.Tooltip>
+          <span>{displayName(props.item.name ?? props.item.path) ?? props.item.mime}</span>
         </div>
       </button>
       <div class="sm-actions">
